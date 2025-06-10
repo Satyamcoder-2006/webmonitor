@@ -12,9 +12,9 @@ interface AlertData {
 
 // Create transporter (will use environment variables)
 function createTransporter() {
-  // Check for different email service configurations
+  // Check for SMTP configuration
   if (process.env.SMTP_HOST) {
-    return nodemailer.createTransporter({
+    return nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: parseInt(process.env.SMTP_PORT || '587'),
       secure: process.env.SMTP_SECURE === 'true',
@@ -25,10 +25,12 @@ function createTransporter() {
     });
   }
   
-  // Gmail configuration
+  // Gmail configuration (uses SMTP)
   if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
-    return nodemailer.createTransporter({
-      service: 'gmail',
+    return nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_PASS, // Use app password for Gmail
@@ -36,13 +38,28 @@ function createTransporter() {
     });
   }
   
-  // SendGrid configuration
-  if (process.env.SENDGRID_API_KEY) {
-    return nodemailer.createTransporter({
-      service: 'SendGrid',
+  // Outlook/Hotmail configuration
+  if (process.env.OUTLOOK_USER && process.env.OUTLOOK_PASS) {
+    return nodemailer.createTransport({
+      host: 'smtp-mail.outlook.com',
+      port: 587,
+      secure: false,
       auth: {
-        user: 'apikey',
-        pass: process.env.SENDGRID_API_KEY,
+        user: process.env.OUTLOOK_USER,
+        pass: process.env.OUTLOOK_PASS,
+      },
+    });
+  }
+  
+  // Generic SMTP with username/password
+  if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    return nodemailer.createTransport({
+      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.EMAIL_PORT || '587'),
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
       },
     });
   }

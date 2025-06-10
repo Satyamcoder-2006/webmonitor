@@ -63,8 +63,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteWebsite(id: number): Promise<boolean> {
-    const result = await db.delete(websites).where(eq(websites.id, id));
-    return result.rowCount > 0;
+    try {
+      await db.delete(websites).where(eq(websites.id, id));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async createMonitoringLog(log: InsertMonitoringLog): Promise<MonitoringLog> {
@@ -76,13 +80,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getMonitoringLogs(websiteId?: number, limit = 50): Promise<MonitoringLog[]> {
-    let query = db.select().from(monitoringLogs);
-    
     if (websiteId) {
-      query = query.where(eq(monitoringLogs.websiteId, websiteId));
+      return await db.select().from(monitoringLogs)
+        .where(eq(monitoringLogs.websiteId, websiteId))
+        .orderBy(desc(monitoringLogs.checkedAt))
+        .limit(limit);
     }
     
-    return await query.orderBy(desc(monitoringLogs.checkedAt)).limit(limit);
+    return await db.select().from(monitoringLogs)
+      .orderBy(desc(monitoringLogs.checkedAt))
+      .limit(limit);
   }
 
   async getLatestLogForWebsite(websiteId: number): Promise<MonitoringLog | undefined> {
