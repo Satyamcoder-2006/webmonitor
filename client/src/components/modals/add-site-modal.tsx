@@ -6,11 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertWebsiteSchema } from "@shared/schema";
+import { createWebsiteSchema } from "@shared/schema";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { InsertWebsite } from "@shared/schema";
+import type { CreateWebsite } from "@shared/schema";
 
 interface AddSiteModalProps {
   isOpen: boolean;
@@ -21,26 +21,25 @@ export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const form = useForm<InsertWebsite>({
-    resolver: zodResolver(insertWebsiteSchema),
+  const form = useForm<CreateWebsite>({
+    resolver: zodResolver(createWebsiteSchema),
     defaultValues: {
-      url: "",
       name: "",
+      url: "",
       email: "",
       checkInterval: 5,
       isActive: true,
     },
   });
 
-  const createWebsiteMutation = useMutation({
-    mutationFn: async (data: InsertWebsite) => {
-      const response = await apiRequest("POST", "/api/websites", data);
-      return response.json();
+  const addWebsiteMutation = useMutation({
+    mutationFn: async (newWebsite: CreateWebsite) => {
+      await apiRequest("POST", "/api/websites", newWebsite);
     },
     onSuccess: () => {
       toast({
-        title: "Website added successfully",
-        description: "Your website is now being monitored.",
+        title: "Website added",
+        description: "Your website has been added successfully.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -56,8 +55,8 @@ export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
     },
   });
 
-  const onSubmit = (data: InsertWebsite) => {
-    createWebsiteMutation.mutate(data);
+  const onSubmit = (data: CreateWebsite) => {
+    addWebsiteMutation.mutate(data);
   };
 
   const handleClose = () => {
@@ -169,10 +168,10 @@ export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
               </Button>
               <Button
                 type="submit"
-                disabled={createWebsiteMutation.isPending}
+                disabled={addWebsiteMutation.isPending}
                 className="flex-1 bg-blue-600 hover:bg-blue-700"
               >
-                {createWebsiteMutation.isPending ? "Adding..." : "Add Website"}
+                {addWebsiteMutation.isPending ? "Adding..." : "Add Website"}
               </Button>
             </div>
           </form>

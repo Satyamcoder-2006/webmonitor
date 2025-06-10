@@ -56,7 +56,7 @@ async function checkWebsite(url: string): Promise<MonitoringResult> {
   }
 }
 
-async function monitorWebsite(websiteId: number, isManualCheck = false) {
+async function monitorWebsite(websiteId: number, isDashboardInitiated: boolean = false) {
   try {
     const website = await storage.getWebsite(websiteId);
     if (!website || !website.isActive) {
@@ -76,69 +76,75 @@ async function monitorWebsite(websiteId: number, isManualCheck = false) {
       errorMessage: result.errorMessage || null,
     });
     
-    // Get the previous status to detect changes
-    const recentLogs = await storage.getMonitoringLogs(website.id, 2);
-    const previousStatus = recentLogs.length > 1 ? recentLogs[1].status : null;
-    
     let shouldSendAlert = false;
     let alertType = '';
     let message = '';
-    
-    // Send alerts for status changes (automatic monitoring)
-    if (result.status !== previousStatus) {
+    const now = new Date();
+    const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000); // 15 minutes cooldown
+
+    const lastStatusInDb = website.lastStatus || 'unknown'; // Use website object directly
+    const lastEmailSentInDb = website.lastEmailSent;
+
+    // Condition 1: Website goes from UP to DOWN (Initial Downtime Alert)
+    if (result.status === 'down' && lastStatusInDb === 'up') {
       shouldSendAlert = true;
-      
-      if (result.status === 'down' && previousStatus === 'up') {
-        alertType = 'down';
-        message = `${website.name} is now offline`;
-        if (result.errorMessage) {
-          message += ` (${result.errorMessage})`;
-        }
-      } else if (result.status === 'up' && (previousStatus === 'down' || previousStatus === 'error')) {
-        alertType = 'up';
-        message = `${website.name} is back online`;
-      } else {
-        shouldSendAlert = false;
-      }
-    }
-    
-    // Send alert for manual checks when website is down
-    if (isManualCheck && result.status === 'down') {
-      shouldSendAlert = true;
-      alertType = 'manual_check';
-      message = `Manual check: ${website.name} is offline`;
+      alertType = 'down';
+      message = `${website.name} is now offline`;
       if (result.errorMessage) {
         message += ` (${result.errorMessage})`;
       }
     }
-    
+    // Condition 2: Website goes from DOWN to UP (Recovery Alert)
+    else if (result.status === 'up' && lastStatusInDb === 'down') {
+      shouldSendAlert = true;
+      alertType = 'up';
+      message = `${website.name} is back online`;
+    }
+    // Condition 3: Website is DOWN AND dashboard initiated AND cooldown passed (Reminder Alert)
+    else if (result.status === 'down' && isDashboardInitiated && (!lastEmailSentInDb || lastEmailSentInDb < fifteenMinutesAgo)) {
+        shouldSendAlert = true;
+        alertType = 'reminder_down'; // A new type for dashboard-initiated reminders
+        message = `${website.name} is currently offline (checked on dashboard)`;
+        if (result.errorMessage) {
+            message += ` (${result.errorMessage})`;
+        }
+    }
+
     if (shouldSendAlert) {
       // Create alert record
-      const alert = await storage.createAlert({
+      await storage.createAlert({
         websiteId: website.id,
         alertType,
         message,
-        emailSent: false,
+        emailSent: true, // Mark as true since we are sending it now
       });
-      
-      // Send email notification
-      try {
-        const emailSent = await sendAlert(website.email, {
-          websiteName: website.name,
-          websiteUrl: website.url,
-          status: result.status,
-          message,
-          timestamp: new Date(),
-          responseTime: result.responseTime,
-          errorMessage: result.errorMessage,
-        });
-        
-        if (emailSent) {
-          console.log(`Alert email sent for ${website.name}`);
+
+      const emailSent = await sendAlert(website.email, {
+        websiteName: website.name,
+        websiteUrl: website.url,
+        status: result.status,
+        message,
+        timestamp: now,
+        responseTime: result.responseTime,
+        errorMessage: result.errorMessage,
+      });
+
+      if (emailSent) {
+        console.log(`Alert email sent for ${website.name} (Type: ${alertType})`);
+        // Update lastEmailSent for DOWN or REMINDER alerts
+        if (alertType === 'down' || alertType === 'reminder_down') {
+            await storage.updateWebsite(website.id, {
+                lastEmailSent: now,
+            });
         }
-      } catch (emailError) {
-        console.error(`Failed to send email alert for ${website.name}:`, emailError);
       }
+    }
+
+    // Always update lastStatus after the check
+    if (lastStatusInDb !== result.status) {
+        await storage.updateWebsite(website.id, {
+            lastStatus: result.status,
+        });
     }
     
     console.log(`${website.name}: ${result.status} (${result.responseTime || 'N/A'}ms)`);
@@ -147,7 +153,7 @@ async function monitorWebsite(websiteId: number, isManualCheck = false) {
   }
 }
 
-async function runMonitoringCycle() {
+async function runMonitoringCycle(isDashboardInitiated: boolean = false) {
   try {
     const activeWebsites = await storage.getActiveWebsites();
     
@@ -156,11 +162,11 @@ async function runMonitoringCycle() {
     // Monitor all websites in parallel with minimal delay for real-time monitoring
     const promises = activeWebsites.map((website, index) => {
       // Small stagger to avoid overwhelming servers
-      return new Promise(resolve => {
+      return new Promise<void>(resolve => {
         setTimeout(() => {
-          monitorWebsite(website.id).catch(error => {
+          monitorWebsite(website.id, isDashboardInitiated).catch(error => {
             console.error(`Error monitoring website ${website.id}:`, error);
-          }).finally(resolve);
+          }).finally(() => resolve());
         }, index * 100); // 100ms stagger between websites
       });
     });
@@ -177,12 +183,12 @@ export function startMonitoring() {
   
   // Run every second for real-time monitoring
   setInterval(() => {
-    runMonitoringCycle();
+    runMonitoringCycle(); // No argument for automatic checks
   }, 1000);
   
   // Run initial check immediately
   setTimeout(() => {
-    runMonitoringCycle();
+    runMonitoringCycle(); // No argument for initial automatic check
   }, 2000);
   
   console.log('Monitoring system started - checking every second');

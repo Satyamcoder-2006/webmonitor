@@ -138,8 +138,14 @@ export async function sendAlert(to: string, alertData: AlertData): Promise<boole
   
   try {
     const fromEmail = process.env.FROM_EMAIL || process.env.EMAIL_USER || 'noreply@webmonitor.app';
-    const subject = `[WebMonitor] ${alertData.websiteName} is ${alertData.status === 'up' ? 'back online' : 'offline'}`;
-    
+    let subject = `[WebMonitor] ${alertData.websiteName} is ${alertData.status === 'up' ? 'back online' : 'offline'}`;
+
+    if (alertData.status === 'down') {
+      subject = `🚨 Site Down Alert: ${alertData.websiteName} (${alertData.websiteUrl})`;
+    } else if (alertData.status === 'up') {
+      subject = `✅ Site Up: ${alertData.websiteName} (${alertData.websiteUrl})`;
+    }
+
     const mailOptions = {
       from: `WebMonitor <${fromEmail}>`,
       to,

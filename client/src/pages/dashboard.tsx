@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "@/components/layout/sidebar";
 import MetricsOverview from "@/components/dashboard/metrics-overview";
 import SitesTable from "@/components/dashboard/sites-table";
@@ -14,12 +14,18 @@ export default function Dashboard() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const queryClient = useQueryClient();
 
+  // Trigger backend monitoring on dashboard load
+  useEffect(() => {
+    fetch("/api/monitoring/run", { method: "POST" });
+  }, []);
+
   const { data: alerts = [] } = useQuery<AlertItem[]>({
     queryKey: ["/api/alerts"],
   });
 
   const handleRefresh = () => {
     queryClient.invalidateQueries();
+    fetch("/api/monitoring/run", { method: "POST" });
   };
 
   const recentDownAlerts = alerts.filter(alert => 

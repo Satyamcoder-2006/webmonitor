@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertWebsiteSchema } from "@shared/schema";
+import { createWebsiteSchema, updateWebsiteSchema } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 
@@ -35,7 +35,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new website
   app.post("/api/websites", async (req, res) => {
     try {
-      const validatedData = insertWebsiteSchema.parse(req.body);
+      const validatedData = createWebsiteSchema.parse(req.body);
       const website = await storage.createWebsite(validatedData);
       res.status(201).json(website);
     } catch (error) {
@@ -57,7 +57,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
-      const updates = insertWebsiteSchema.partial().parse(req.body);
+      const updates = updateWebsiteSchema.parse(req.body);
       const website = await storage.updateWebsite(id, updates);
       
       if (!website) {
@@ -80,6 +80,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/websites/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      console.log(`Attempting to delete website with ID: ${id}`);
       if (isNaN(id)) {
         return res.status(400).json({ message: "Invalid website ID" });
       }
@@ -116,14 +117,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const hours = req.query.hours ? parseInt(req.query.hours as string) : 24;
       const logs = await storage.getRecentLogs(hours);
       
+      // Filter out logs where the associated website might have been deleted
+      const validLogs = logs.filter(log => log.website !== null);
+
       // Transform to activity format
-      const activities = logs.map(log => ({
+      const activities = validLogs.map(log => ({
         id: log.id,
         type: log.status === 'up' ? 'recovery' : log.status === 'down' ? 'outage' : 'check',
-        message: `${log.website.name} ${log.status === 'up' ? 'came back online' : log.status === 'down' ? 'went offline' : 'was checked'}`,
+        message: `${log.website!.name} ${log.status === 'up' ? 'came back online' : log.status === 'down' ? 'went offline' : 'was checked'}`,
         timestamp: log.checkedAt,
         websiteId: log.websiteId,
-        websiteName: log.website.name,
+        websiteName: log.website!.name,
       }));
       
       res.json(activities);
@@ -177,7 +181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/monitoring/run", async (req, res) => {
     try {
       const { runMonitoringCycle } = await import("./monitoring");
-      await runMonitoringCycle();
+      await runMonitoringCycle(true); // Pass true to indicate dashboard initiated
       res.json({ message: "Monitoring cycle completed" });
     } catch (error) {
       console.error('Error running monitoring cycle:', error);

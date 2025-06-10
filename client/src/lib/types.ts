@@ -38,13 +38,15 @@ export interface PerformanceData {
 export interface AlertItem {
   id: number;
   websiteId: number;
-  alertType: string;
-  message: string;
-  sentAt: string;
-  emailSent: boolean;
   website: {
     id: number;
     name: string;
     url: string;
   };
+  alertType: string;
+  message: string;
+  emailSent: boolean;
+  sentAt: string;
+  read: boolean;
+  createdAt: string;
 }

@@ -8,9 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Mail, Clock, Globe, Shield, Database, Zap } from "lucide-react";
+import { Mail, Clock, Globe, Shield, Database, Zap, AlertTriangle, Settings2 } from "lucide-react";
 
 interface SystemSettings {
   emailSettings: {
@@ -41,7 +42,7 @@ interface SystemSettings {
 export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  
+  const [activeTab, setActiveTab] = useState("monitoring");
   const [testEmail, setTestEmail] = useState("");
 
   const { data: settings, isLoading } = useQuery<SystemSettings>({
@@ -164,7 +165,7 @@ export default function Settings() {
       </div>
 
       {/* System Information */}
-      <Card>
+      <Card className="hover:shadow-lg transition-shadow">
         <CardHeader>
           <CardTitle className="flex items-center">
             <Database className="h-5 w-5 mr-2" />
@@ -201,267 +202,252 @@ export default function Settings() {
               onClick={() => restartMonitoringMutation.mutate()}
               disabled={restartMonitoringMutation.isPending}
             >
+              <Zap className="h-4 w-4 mr-2" />
               Restart Monitoring
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Email Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center">
-            <Mail className="h-5 w-5 mr-2" />
-            Email Configuration
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <Label>SMTP Status</Label>
-              <p className="text-sm text-muted-foreground">
-                {settings.emailSettings.smtpConfigured ? "Configured and ready" : "Not configured"}
-              </p>
-            </div>
-            <Badge variant={settings.emailSettings.smtpConfigured ? "default" : "destructive"}>
-              {settings.emailSettings.smtpConfigured ? "Active" : "Inactive"}
-            </Badge>
-          </div>
-          
-          {settings.emailSettings.smtpConfigured && (
-            <div>
-              <Label>From Email</Label>
-              <p className="text-sm font-medium">{settings.emailSettings.fromEmail}</p>
-            </div>
-          )}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="monitoring">
+            <Clock className="h-4 w-4 mr-2" />
+            Monitoring
+          </TabsTrigger>
+          <TabsTrigger value="alerts">
+            <AlertTriangle className="h-4 w-4 mr-2" />
+            Alerts
+          </TabsTrigger>
+          <TabsTrigger value="email">
+            <Mail className="h-4 w-4 mr-2" />
+            Email
+          </TabsTrigger>
+          <TabsTrigger value="system">
+            <Settings2 className="h-4 w-4 mr-2" />
+            System
+          </TabsTrigger>
+        </TabsList>
 
-          <Separator />
-          
-          <div className="space-y-3">
-            <Label htmlFor="test-email">Test Email</Label>
-            <div className="flex space-x-2">
-              <Input
-                id="test-email"
-                placeholder="Enter email address"
-                value={testEmail}
-                onChange={(e) => setTestEmail(e.target.value)}
-                type="email"
-              />
-              <Button
-                onClick={() => testEmailMutation.mutate(testEmail)}
-                disabled={testEmailMutation.isPending || !testEmail}
-              >
-                Send Test
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        <TabsContent value="monitoring" className="space-y-6">
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Clock className="h-5 w-5 mr-2" />
+                Monitoring Settings
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Check Interval (seconds)</Label>
+                  <Input
+                    type="number"
+                    value={settings.monitoringSettings.checkInterval}
+                    onChange={(e) => updateSettingsMutation.mutate({
+                      monitoringSettings: {
+                        ...settings.monitoringSettings,
+                        checkInterval: parseInt(e.target.value)
+                      }
+                    })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Timeout (seconds)</Label>
+                  <Input
+                    type="number"
+                    value={settings.monitoringSettings.timeout}
+                    onChange={(e) => updateSettingsMutation.mutate({
+                      monitoringSettings: {
+                        ...settings.monitoringSettings,
+                        timeout: parseInt(e.target.value)
+                      }
+                    })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Retries</Label>
+                  <Input
+                    type="number"
+                    value={settings.monitoringSettings.retries}
+                    onChange={(e) => updateSettingsMutation.mutate({
+                      monitoringSettings: {
+                        ...settings.monitoringSettings,
+                        retries: parseInt(e.target.value)
+                      }
+                    })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Real-time Monitoring</Label>
+                    <Switch
+                      checked={settings.monitoringSettings.realTimeEnabled}
+                      onCheckedChange={(checked) => updateSettingsMutation.mutate({
+                        monitoringSettings: {
+                          ...settings.monitoringSettings,
+                          realTimeEnabled: checked
+                        }
+                      })}
+                    />
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Monitoring Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center">
-            <Clock className="h-5 w-5 mr-2" />
-            Monitoring Configuration
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <Label htmlFor="check-interval">Check Interval</Label>
-              <Select 
-                value={settings.monitoringSettings.checkInterval.toString()}
-                onValueChange={(value) => updateSettingsMutation.mutate({
-                  monitoringSettings: {
-                    ...settings.monitoringSettings,
-                    checkInterval: parseInt(value)
-                  }
-                })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1">Every second</SelectItem>
-                  <SelectItem value="30">Every 30 seconds</SelectItem>
-                  <SelectItem value="60">Every minute</SelectItem>
-                  <SelectItem value="300">Every 5 minutes</SelectItem>
-                  <SelectItem value="600">Every 10 minutes</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div>
-              <Label htmlFor="timeout">Request Timeout (ms)</Label>
-              <Input
-                id="timeout"
-                type="number"
-                value={settings.monitoringSettings.timeout}
-                onChange={(e) => updateSettingsMutation.mutate({
-                  monitoringSettings: {
-                    ...settings.monitoringSettings,
-                    timeout: parseInt(e.target.value)
-                  }
-                })}
-              />
-            </div>
-            
-            <div>
-              <Label htmlFor="retries">Retry Attempts</Label>
-              <Input
-                id="retries"
-                type="number"
-                value={settings.monitoringSettings.retries}
-                onChange={(e) => updateSettingsMutation.mutate({
-                  monitoringSettings: {
-                    ...settings.monitoringSettings,
-                    retries: parseInt(e.target.value)
-                  }
-                })}
-              />
-            </div>
-          </div>
-          
-          <Separator />
-          
-          <div className="flex items-center justify-between">
-            <div>
-              <Label>Real-time Monitoring</Label>
-              <p className="text-sm text-muted-foreground">
-                Check websites every second for immediate alerts
-              </p>
-            </div>
-            <Switch
-              checked={settings.monitoringSettings.realTimeEnabled}
-              onCheckedChange={(checked) => updateSettingsMutation.mutate({
-                monitoringSettings: {
-                  ...settings.monitoringSettings,
-                  realTimeEnabled: checked
-                }
-              })}
-            />
-          </div>
-        </CardContent>
-      </Card>
+        <TabsContent value="alerts" className="space-y-6">
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <AlertTriangle className="h-5 w-5 mr-2" />
+                Alert Settings
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Email Alerts</Label>
+                    <Switch
+                      checked={settings.alertSettings.emailAlerts}
+                      onCheckedChange={(checked) => updateSettingsMutation.mutate({
+                        alertSettings: {
+                          ...settings.alertSettings,
+                          emailAlerts: checked
+                        }
+                      })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Immediate Alerts</Label>
+                    <Switch
+                      checked={settings.alertSettings.immediateAlerts}
+                      onCheckedChange={(checked) => updateSettingsMutation.mutate({
+                        alertSettings: {
+                          ...settings.alertSettings,
+                          immediateAlerts: checked
+                        }
+                      })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Alert Cooldown (minutes)</Label>
+                  <Input
+                    type="number"
+                    value={settings.alertSettings.alertCooldown}
+                    onChange={(e) => updateSettingsMutation.mutate({
+                      alertSettings: {
+                        ...settings.alertSettings,
+                        alertCooldown: parseInt(e.target.value)
+                      }
+                    })}
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Alert Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center">
-            <Shield className="h-5 w-5 mr-2" />
-            Alert Configuration
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <Label>Email Alerts</Label>
-              <p className="text-sm text-muted-foreground">
-                Send email notifications for status changes
-              </p>
-            </div>
-            <Switch
-              checked={settings.alertSettings.emailAlerts}
-              onCheckedChange={(checked) => updateSettingsMutation.mutate({
-                alertSettings: {
-                  ...settings.alertSettings,
-                  emailAlerts: checked
-                }
-              })}
-            />
-          </div>
-          
-          <div className="flex items-center justify-between">
-            <div>
-              <Label>Immediate Manual Check Alerts</Label>
-              <p className="text-sm text-muted-foreground">
-                Send alerts for manual checks when website is down
-              </p>
-            </div>
-            <Switch
-              checked={settings.alertSettings.immediateAlerts}
-              onCheckedChange={(checked) => updateSettingsMutation.mutate({
-                alertSettings: {
-                  ...settings.alertSettings,
-                  immediateAlerts: checked
-                }
-              })}
-            />
-          </div>
-          
-          <div>
-            <Label htmlFor="alert-cooldown">Alert Cooldown (minutes)</Label>
-            <Input
-              id="alert-cooldown"
-              type="number"
-              value={settings.alertSettings.alertCooldown}
-              onChange={(e) => updateSettingsMutation.mutate({
-                alertSettings: {
-                  ...settings.alertSettings,
-                  alertCooldown: parseInt(e.target.value)
-                }
-              })}
-            />
-            <p className="text-sm text-muted-foreground mt-1">
-              Minimum time between duplicate alerts for the same website
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+        <TabsContent value="email" className="space-y-6">
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Mail className="h-5 w-5 mr-2" />
+                Email Settings
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>From Email</Label>
+                  <Input
+                    type="email"
+                    value={settings.emailSettings.fromEmail}
+                    onChange={(e) => updateSettingsMutation.mutate({
+                      emailSettings: {
+                        ...settings.emailSettings,
+                        fromEmail: e.target.value
+                      }
+                    })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Test Email Address</Label>
+                  <div className="flex space-x-2">
+                    <Input
+                      type="email"
+                      value={testEmail}
+                      onChange={(e) => setTestEmail(e.target.value)}
+                      placeholder="Enter email to test"
+                    />
+                    <Button
+                      onClick={() => testEmailMutation.mutate(testEmail)}
+                      disabled={testEmailMutation.isPending}
+                    >
+                      <Mail className="h-4 w-4 mr-2" />
+                      Test
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Badge variant={settings.emailSettings.smtpConfigured ? "default" : "destructive"}>
+                  {settings.emailSettings.smtpConfigured ? "SMTP Configured" : "SMTP Not Configured"}
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Data Management */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center">
-            <Database className="h-5 w-5 mr-2" />
-            Data Management
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (confirm("Are you sure you want to clear all monitoring logs?")) {
-                  clearDataMutation.mutate("logs");
-                }
-              }}
-              disabled={clearDataMutation.isPending}
-            >
-              Clear Logs
-            </Button>
-            
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (confirm("Are you sure you want to clear all alerts?")) {
-                  clearDataMutation.mutate("alerts");
-                }
-              }}
-              disabled={clearDataMutation.isPending}
-            >
-              Clear Alerts
-            </Button>
-            
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (confirm("Are you sure you want to reset all statistics?")) {
-                  clearDataMutation.mutate("stats");
-                }
-              }}
-              disabled={clearDataMutation.isPending}
-            >
-              Reset Stats
-            </Button>
-          </div>
-          
-          <p className="text-sm text-muted-foreground">
-            Warning: These actions cannot be undone. Make sure to backup your data before clearing.
-          </p>
-        </CardContent>
-      </Card>
+        <TabsContent value="system" className="space-y-6">
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Settings2 className="h-5 w-5 mr-2" />
+                System Settings
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-sm font-medium">Clear Data</Label>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Clear historical data to free up space. This action cannot be undone.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => clearDataMutation.mutate("logs")}
+                      disabled={clearDataMutation.isPending}
+                    >
+                      Clear Monitoring Logs
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => clearDataMutation.mutate("alerts")}
+                      disabled={clearDataMutation.isPending}
+                    >
+                      Clear Alerts
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => clearDataMutation.mutate("all")}
+                      disabled={clearDataMutation.isPending}
+                    >
+                      Clear All Data
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

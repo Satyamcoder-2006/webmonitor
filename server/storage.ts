@@ -1,25 +1,25 @@
-import { websites, monitoringLogs, alerts, type Website, type InsertWebsite, type MonitoringLog, type InsertMonitoringLog, type Alert, type InsertAlert } from "@shared/schema";
+import { websites, monitoringLogs, alerts, siteStatus, type Website, type CreateWebsite, type UpdateWebsite, type MonitoringLog, type InsertMonitoringLog, type Alert, type InsertAlert } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql, and, gte } from "drizzle-orm";
+import { eq, desc, sql, and, gte, isNotNull } from "drizzle-orm";
 
 export interface IStorage {
   // Website operations
-  createWebsite(website: InsertWebsite): Promise<Website>;
+  createWebsite(website: CreateWebsite): Promise<Website>;
   getWebsites(): Promise<Website[]>;
   getWebsite(id: number): Promise<Website | undefined>;
   getActiveWebsites(): Promise<Website[]>;
-  updateWebsite(id: number, updates: Partial<InsertWebsite>): Promise<Website | undefined>;
+  updateWebsite(id: number, updates: UpdateWebsite): Promise<Website | undefined>;
   deleteWebsite(id: number): Promise<boolean>;
 
   // Monitoring log operations
   createMonitoringLog(log: InsertMonitoringLog): Promise<MonitoringLog>;
   getMonitoringLogs(websiteId?: number, limit?: number): Promise<MonitoringLog[]>;
   getLatestLogForWebsite(websiteId: number): Promise<MonitoringLog | undefined>;
-  getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website })[]>;
+  getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website | null })[]>;
 
   // Alert operations
   createAlert(alert: InsertAlert): Promise<Alert>;
-  getRecentAlerts(limit?: number): Promise<(Alert & { website: Website })[]>;
+  getRecentAlerts(limit?: number): Promise<(Alert & { website: Website | null })[]>;
 
   // Analytics
   getWebsiteStats(): Promise<{
@@ -32,10 +32,10 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async createWebsite(website: InsertWebsite): Promise<Website> {
+  async createWebsite(website: CreateWebsite): Promise<Website> {
     const [result] = await db
       .insert(websites)
-      .values({ ...website, updatedAt: new Date() })
+      .values({ ...website, updatedAt: new Date(), createdAt: new Date(), lastStatus: 'unknown', isActive: true, checkInterval: website.checkInterval || 60 })
       .returning();
     return result;
   }
@@ -53,22 +53,37 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(websites).where(eq(websites.isActive, true));
   }
 
-  async updateWebsite(id: number, updates: Partial<InsertWebsite>): Promise<Website | undefined> {
-    const [website] = await db
-      .update(websites)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(eq(websites.id, id))
-      .returning();
-    return website || undefined;
+  async updateWebsite(id: number, updates: UpdateWebsite): Promise<Website | undefined> {
+    return db.transaction(async (tx) => {
+      const [updatedWebsite] = await tx
+        .update(websites)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(eq(websites.id, id))
+        .returning();
+      return updatedWebsite;
+    });
   }
 
   async deleteWebsite(id: number): Promise<boolean> {
-    try {
-      await db.delete(websites).where(eq(websites.id, id));
-      return true;
-    } catch {
-      return false;
-    }
+    return db.transaction(async (tx) => {
+      try {
+        // Delete related records first due to foreign key constraints
+        await tx.delete(monitoringLogs).where(eq(monitoringLogs.websiteId, id));
+        await tx.delete(alerts).where(eq(alerts.websiteId, id));
+        await tx.delete(siteStatus).where(eq(siteStatus.websiteId, id));
+
+        // Now delete the website. If no error is thrown, it's successful.
+        await tx.delete(websites).where(eq(websites.id, id));
+        return true; // Successfully deleted (or website didn't exist, which is fine for delete op)
+      } catch (error) {
+        console.error(`Error deleting website ${id} and related data:`, error);
+        // If an error occurs, the transaction will be rolled back automatically
+        return false;
+      }
+    });
   }
 
   async createMonitoringLog(log: InsertMonitoringLog): Promise<MonitoringLog> {
@@ -93,33 +108,32 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getLatestLogForWebsite(websiteId: number): Promise<MonitoringLog | undefined> {
-    const [log] = await db
-      .select()
-      .from(monitoringLogs)
+    const [latestLog] = await db.select().from(monitoringLogs)
       .where(eq(monitoringLogs.websiteId, websiteId))
       .orderBy(desc(monitoringLogs.checkedAt))
       .limit(1);
-    return log || undefined;
+    return latestLog;
   }
 
-  async getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website })[]> {
-    const hoursAgo = new Date(Date.now() - hours * 60 * 60 * 1000);
-    
-    return await db
-      .select({
-        id: monitoringLogs.id,
-        websiteId: monitoringLogs.websiteId,
-        status: monitoringLogs.status,
-        httpStatus: monitoringLogs.httpStatus,
-        responseTime: monitoringLogs.responseTime,
-        errorMessage: monitoringLogs.errorMessage,
-        checkedAt: monitoringLogs.checkedAt,
-        website: websites,
-      })
-      .from(monitoringLogs)
-      .innerJoin(websites, eq(monitoringLogs.websiteId, websites.id))
-      .where(gte(monitoringLogs.checkedAt, hoursAgo))
-      .orderBy(desc(monitoringLogs.checkedAt));
+  async getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website | null })[]> {
+    const cutOff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    return await db.select({
+      id: monitoringLogs.id,
+      websiteId: monitoringLogs.websiteId,
+      status: monitoringLogs.status,
+      httpStatus: monitoringLogs.httpStatus,
+      responseTime: monitoringLogs.responseTime,
+      errorMessage: monitoringLogs.errorMessage,
+      checkedAt: monitoringLogs.checkedAt,
+      website: websites, // Include website data
+    })
+    .from(monitoringLogs)
+    .leftJoin(websites, eq(monitoringLogs.websiteId, websites.id))
+    .where(and(
+      gte(monitoringLogs.checkedAt, cutOff),
+      // isNotNull(websites.id) // Removed this as it changes leftJoin to innerJoin behavior
+    ))
+    .orderBy(desc(monitoringLogs.checkedAt));
   }
 
   async createAlert(alert: InsertAlert): Promise<Alert> {
@@ -130,21 +144,20 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getRecentAlerts(limit = 10): Promise<(Alert & { website: Website })[]> {
-    return await db
-      .select({
-        id: alerts.id,
-        websiteId: alerts.websiteId,
-        alertType: alerts.alertType,
-        message: alerts.message,
-        sentAt: alerts.sentAt,
-        emailSent: alerts.emailSent,
-        website: websites,
-      })
-      .from(alerts)
-      .innerJoin(websites, eq(alerts.websiteId, websites.id))
-      .orderBy(desc(alerts.sentAt))
-      .limit(limit);
+  async getRecentAlerts(limit = 100): Promise<(Alert & { website: Website | null })[]> {
+    return await db.select({
+      id: alerts.id,
+      websiteId: alerts.websiteId,
+      alertType: alerts.alertType,
+      message: alerts.message,
+      sentAt: alerts.sentAt,
+      emailSent: alerts.emailSent,
+      website: websites,
+    })
+    .from(alerts)
+    .leftJoin(websites, eq(alerts.websiteId, websites.id))
+    .orderBy(desc(alerts.sentAt))
+    .limit(limit);
   }
 
   async getWebsiteStats(): Promise<{
@@ -159,33 +172,24 @@ export class DatabaseStorage implements IStorage {
       .from(websites)
       .then(rows => rows[0]?.count || 0);
 
-    // Get latest status for each website - simplified approach
-    const latestStatuses = await db
-      .select({
+    // Get the latest status for each website using a subquery or DISTINCT ON
+    const latestWebsiteStatuses = await db
+      .selectDistinctOn([monitoringLogs.websiteId], {
         websiteId: monitoringLogs.websiteId,
         status: monitoringLogs.status,
         responseTime: monitoringLogs.responseTime,
+        checkedAt: monitoringLogs.checkedAt,
       })
       .from(monitoringLogs)
-      .orderBy(desc(monitoringLogs.checkedAt));
+      .orderBy(monitoringLogs.websiteId, desc(monitoringLogs.checkedAt));
 
-    // Group by website ID to get only the latest status for each
-    const latestStatusByWebsite = new Map();
-    latestStatuses.forEach(status => {
-      if (!latestStatusByWebsite.has(status.websiteId)) {
-        latestStatusByWebsite.set(status.websiteId, status);
-      }
-    });
-    
-    const uniqueLatestStatuses = Array.from(latestStatusByWebsite.values());
+    const sitesUp = latestWebsiteStatuses.filter(s => s.status === 'up').length;
+    const sitesDown = latestWebsiteStatuses.filter(s => s.status === 'down').length;
 
-    const sitesUp = uniqueLatestStatuses.filter(s => s.status === 'up').length;
-    const sitesDown = uniqueLatestStatuses.filter(s => s.status === 'down').length;
-    
-    const validResponseTimes = uniqueLatestStatuses
+    const validResponseTimes = latestWebsiteStatuses
       .filter(s => s.responseTime !== null)
       .map(s => s.responseTime!);
-    
+
     const averageResponseTime = validResponseTimes.length > 0 
       ? Math.round(validResponseTimes.reduce((a, b) => a + b, 0) / validResponseTimes.length)
       : 0;
