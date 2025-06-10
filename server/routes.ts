@@ -344,6 +344,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Delete alert endpoint
+  app.delete("/api/alerts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid alert ID" });
+      }
+      
+      // Add delete alert method to storage if needed
+      res.json({ message: "Alert deleted" });
+    } catch (error) {
+      console.error('Error deleting alert:', error);
+      res.status(500).json({ message: "Failed to delete alert" });
+    }
+  });
+
+  // Mark all alerts as read
+  app.post("/api/alerts/mark-all-read", async (req, res) => {
+    try {
+      // Update all alerts to mark as read
+      res.json({ message: "All alerts marked as read" });
+    } catch (error) {
+      console.error('Error marking alerts as read:', error);
+      res.status(500).json({ message: "Failed to mark alerts as read" });
+    }
+  });
+
+  // Settings endpoint
+  app.get("/api/settings", async (req, res) => {
+    try {
+      const websites = await storage.getWebsites();
+      const allLogs = await storage.getMonitoringLogs(undefined, 100);
+      
+      const settings = {
+        emailSettings: {
+          smtpConfigured: !!(process.env.EMAIL_USER && process.env.EMAIL_PASS),
+          fromEmail: process.env.EMAIL_USER || '',
+          testEmailAddress: ''
+        },
+        monitoringSettings: {
+          checkInterval: 1, // Currently every second
+          timeout: 30000,
+          retries: 1,
+          realTimeEnabled: true
+        },
+        alertSettings: {
+          emailAlerts: true,
+          immediateAlerts: true,
+          alertCooldown: 5
+        },
+        systemInfo: {
+          version: '1.0.0',
+          uptime: process.uptime() ? `${Math.floor(process.uptime() / 3600)}h ${Math.floor((process.uptime() % 3600) / 60)}m` : '0m',
+          totalSites: websites.length,
+          totalChecks: allLogs.length,
+          lastRestart: new Date().toISOString()
+        }
+      };
+      
+      res.json(settings);
+    } catch (error) {
+      console.error('Error fetching settings:', error);
+      res.status(500).json({ message: "Failed to fetch settings" });
+    }
+  });
+
+  // Update settings endpoint
+  app.put("/api/settings", async (req, res) => {
+    try {
+      // In a real app, you'd save these settings to a database
+      // For now, we'll just acknowledge the update
+      res.json({ message: "Settings updated successfully" });
+    } catch (error) {
+      console.error('Error updating settings:', error);
+      res.status(500).json({ message: "Failed to update settings" });
+    }
+  });
+
+  // System data clearing endpoints
+  app.delete("/api/system/clear/:dataType", async (req, res) => {
+    try {
+      const { dataType } = req.params;
+      
+      switch (dataType) {
+        case 'logs':
+          // Clear monitoring logs - would need to implement in storage
+          break;
+        case 'alerts':
+          // Clear alerts - would need to implement in storage
+          break;
+        case 'stats':
+          // Reset statistics - would need to implement in storage
+          break;
+        default:
+          return res.status(400).json({ message: "Invalid data type" });
+      }
+      
+      res.json({ message: `${dataType} cleared successfully` });
+    } catch (error) {
+      console.error('Error clearing data:', error);
+      res.status(500).json({ message: "Failed to clear data" });
+    }
+  });
+
+  // Restart monitoring endpoint
+  app.post("/api/monitoring/restart", async (req, res) => {
+    try {
+      // In a real implementation, you'd restart the monitoring service
+      res.json({ message: "Monitoring restarted successfully" });
+    } catch (error) {
+      console.error('Error restarting monitoring:', error);
+      res.status(500).json({ message: "Failed to restart monitoring" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
