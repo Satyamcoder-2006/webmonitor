@@ -156,6 +156,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Manual check endpoint
+  app.post("/api/websites/:id/check", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid website ID" });
+      }
+
+      const { monitorWebsite } = await import("./monitoring");
+      await monitorWebsite(id);
+      res.json({ message: "Check completed" });
+    } catch (error) {
+      console.error('Error running manual check:', error);
+      res.status(500).json({ message: "Failed to run check" });
+    }
+  });
+
+  // Trigger monitoring cycle
+  app.post("/api/monitoring/run", async (req, res) => {
+    try {
+      const { runMonitoringCycle } = await import("./monitoring");
+      await runMonitoringCycle();
+      res.json({ message: "Monitoring cycle completed" });
+    } catch (error) {
+      console.error('Error running monitoring cycle:', error);
+      res.status(500).json({ message: "Failed to run monitoring cycle" });
+    }
+  });
+
   // Get performance data for charts
   app.get("/api/performance", async (req, res) => {
     try {
