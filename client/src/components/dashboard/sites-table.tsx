@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, RefreshCw, Edit, Pause, Trash2, Globe } from "lucide-react";
+import { Download, RefreshCw, Edit, Pause, Trash2, Globe, Play } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -51,6 +51,28 @@ export default function SitesTable() {
     onError: (error: Error) => {
       toast({
         title: "Failed to delete website",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const checkWebsiteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("POST", `/api/websites/${id}/check`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/activity"] });
+      toast({
+        title: "Website checked",
+        description: "Status check completed successfully.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to check website",
         description: error.message,
         variant: "destructive",
       });
@@ -172,6 +194,16 @@ export default function SitesTable() {
                     </td>
                     <td className="px-6 py-4 text-sm font-medium">
                       <div className="flex items-center space-x-2">
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-green-600 hover:text-green-700"
+                          onClick={() => checkWebsiteMutation.mutate(website.id)}
+                          disabled={checkWebsiteMutation.isPending}
+                          title="Check now"
+                        >
+                          <Play className="h-4 w-4" />
+                        </Button>
                         <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700">
                           <Edit className="h-4 w-4" />
                         </Button>
