@@ -150,22 +150,22 @@ async function monitorWebsite(websiteId: number, isManualCheck = false) {
 async function runMonitoringCycle() {
   try {
     const activeWebsites = await storage.getActiveWebsites();
-    console.log(`Running monitoring cycle for ${activeWebsites.length} websites`);
     
-    // Monitor all websites in parallel with some delay to avoid overwhelming
-    for (let i = 0; i < activeWebsites.length; i++) {
-      const website = activeWebsites[i];
-      
-      // Add small delay between requests to be respectful
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      
-      // Don't await - let them run in parallel but with staggered starts
-      monitorWebsite(website.id).catch(error => {
-        console.error(`Error in monitoring cycle for website ${website.id}:`, error);
+    if (activeWebsites.length === 0) return;
+    
+    // Monitor all websites in parallel with minimal delay for real-time monitoring
+    const promises = activeWebsites.map((website, index) => {
+      // Small stagger to avoid overwhelming servers
+      return new Promise(resolve => {
+        setTimeout(() => {
+          monitorWebsite(website.id).catch(error => {
+            console.error(`Error monitoring website ${website.id}:`, error);
+          }).finally(resolve);
+        }, index * 100); // 100ms stagger between websites
       });
-    }
+    });
+    
+    await Promise.all(promises);
   } catch (error) {
     console.error('Error in monitoring cycle:', error);
   }
@@ -175,17 +175,17 @@ async function runMonitoringCycle() {
 export function startMonitoring() {
   console.log('Starting website monitoring system...');
   
-  // Run every 5 minutes
-  cron.schedule('*/5 * * * *', () => {
+  // Run every second for real-time monitoring
+  setInterval(() => {
     runMonitoringCycle();
-  });
+  }, 1000);
   
-  // Run initial check after 30 seconds
+  // Run initial check immediately
   setTimeout(() => {
     runMonitoringCycle();
-  }, 30000);
+  }, 2000);
   
-  console.log('Monitoring system started - checking every 5 minutes');
+  console.log('Monitoring system started - checking every second');
 }
 
 // Export for manual testing

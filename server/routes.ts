@@ -217,6 +217,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Analytics endpoint
+  app.get("/api/analytics", async (req, res) => {
+    try {
+      const [websites, allLogs] = await Promise.all([
+        storage.getWebsites(),
+        storage.getMonitoringLogs(undefined, 1000) // Get more logs for analytics
+      ]);
+
+      // Calculate metrics
+      const totalChecks = allLogs.length;
+      const validResponseTimes = allLogs.filter(log => log.responseTime && log.responseTime > 0);
+      const averageResponseTime = validResponseTimes.length > 0 
+        ? Math.round(validResponseTimes.reduce((sum, log) => sum + log.responseTime!, 0) / validResponseTimes.length)
+        : 0;
+
+      // Calculate uptime percentage (last 24 hours)
+      const last24Hours = new Date();
+      last24Hours.setHours(last24Hours.getHours() - 24);
+      const recent24HLogs = allLogs.filter(log => new Date(log.checkedAt) >= last24Hours);
+      const upChecks = recent24HLogs.filter(log => log.status === 'up').length;
+      const uptimePercentage = recent24HLogs.length > 0 
+        ? Math.round((upChecks / recent24HLogs.length) * 100)
+        : 0;
+
+      // Count downtime events
+      const downtimeEvents = recent24HLogs.filter(log => log.status === 'down').length;
+
+      // Response time data by hour
+      const hourlyData = new Map();
+      validResponseTimes.forEach(log => {
+        const hour = new Date(log.checkedAt).getHours();
+        const hourKey = `${hour.toString().padStart(2, '0')}:00`;
+        if (!hourlyData.has(hourKey)) {
+          hourlyData.set(hourKey, { total: 0, count: 0 });
+        }
+        const data = hourlyData.get(hourKey);
+        data.total += log.responseTime!;
+        data.count += 1;
+      });
+
+      const responseTimeData = Array.from(hourlyData.entries())
+        .map(([hour, data]) => ({
+          hour,
+          averageResponseTime: Math.round(data.total / data.count),
+          checks: data.count
+        }))
+        .sort((a, b) => a.hour.localeCompare(b.hour));
+
+      // Status distribution
+      const statusCounts = allLogs.reduce((acc, log) => {
+        acc[log.status] = (acc[log.status] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const statusDistribution = Object.entries(statusCounts).map(([status, count]) => ({
+        status,
+        count,
+        percentage: Math.round((count / totalChecks) * 100)
+      }));
+
+      // Website stats
+      const websiteStats = await Promise.all(
+        websites.map(async (website) => {
+          const websiteLogs = allLogs.filter(log => log.websiteId === website.id);
+          const websiteUpChecks = websiteLogs.filter(log => log.status === 'up').length;
+          const websiteUptime = websiteLogs.length > 0 
+            ? Math.round((websiteUpChecks / websiteLogs.length) * 100)
+            : 0;
+          
+          const websiteResponseTimes = websiteLogs.filter(log => log.responseTime && log.responseTime > 0);
+          const websiteAvgResponse = websiteResponseTimes.length > 0
+            ? Math.round(websiteResponseTimes.reduce((sum, log) => sum + log.responseTime!, 0) / websiteResponseTimes.length)
+            : 0;
+
+          const lastDowntimeLog = websiteLogs.find(log => log.status === 'down');
+
+          return {
+            id: website.id,
+            name: website.name,
+            url: website.url,
+            totalChecks: websiteLogs.length,
+            uptime: websiteUptime,
+            averageResponseTime: websiteAvgResponse,
+            lastDowntime: lastDowntimeLog?.checkedAt || null
+          };
+        })
+      );
+
+      res.json({
+        totalChecks,
+        averageResponseTime,
+        uptimePercentage,
+        downtimeEvents,
+        responseTimeData,
+        statusDistribution,
+        websiteStats
+      });
+    } catch (error) {
+      console.error('Error fetching analytics:', error);
+      res.status(500).json({ message: "Failed to fetch analytics" });
+    }
+  });
+
   // Test email endpoint
   app.post("/api/test-email", async (req, res) => {
     try {
