@@ -26,14 +26,14 @@ function createTransporter() {
   }
   
   // Gmail configuration (uses SMTP)
-  if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
+  if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
     return nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
       secure: false,
       auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS, // Use app password for Gmail
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS, // Use app password for Gmail
       },
     });
   }
@@ -137,7 +137,7 @@ export async function sendAlert(to: string, alertData: AlertData): Promise<boole
   }
   
   try {
-    const fromEmail = process.env.FROM_EMAIL || process.env.GMAIL_USER || process.env.SMTP_USER || 'noreply@webmonitor.app';
+    const fromEmail = process.env.FROM_EMAIL || process.env.EMAIL_USER || 'noreply@webmonitor.app';
     const subject = `[WebMonitor] ${alertData.websiteName} is ${alertData.status === 'up' ? 'back online' : 'offline'}`;
     
     const mailOptions = {
