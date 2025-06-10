@@ -56,7 +56,7 @@ async function checkWebsite(url: string): Promise<MonitoringResult> {
   }
 }
 
-async function monitorWebsite(websiteId: number) {
+async function monitorWebsite(websiteId: number, isManualCheck = false) {
   try {
     const website = await storage.getWebsite(websiteId);
     if (!website || !website.isActive) {
@@ -80,10 +80,13 @@ async function monitorWebsite(websiteId: number) {
     const recentLogs = await storage.getMonitoringLogs(website.id, 2);
     const previousStatus = recentLogs.length > 1 ? recentLogs[1].status : null;
     
-    // Send alerts for status changes
+    let shouldSendAlert = false;
+    let alertType = '';
+    let message = '';
+    
+    // Send alerts for status changes (automatic monitoring)
     if (result.status !== previousStatus) {
-      let alertType: string;
-      let message: string;
+      shouldSendAlert = true;
       
       if (result.status === 'down' && previousStatus === 'up') {
         alertType = 'down';
@@ -95,9 +98,21 @@ async function monitorWebsite(websiteId: number) {
         alertType = 'up';
         message = `${website.name} is back online`;
       } else {
-        return; // No alert needed
+        shouldSendAlert = false;
       }
-      
+    }
+    
+    // Send alert for manual checks when website is down
+    if (isManualCheck && result.status === 'down') {
+      shouldSendAlert = true;
+      alertType = 'manual_check';
+      message = `Manual check: ${website.name} is offline`;
+      if (result.errorMessage) {
+        message += ` (${result.errorMessage})`;
+      }
+    }
+    
+    if (shouldSendAlert) {
       // Create alert record
       const alert = await storage.createAlert({
         websiteId: website.id,
@@ -119,8 +134,6 @@ async function monitorWebsite(websiteId: number) {
         });
         
         if (emailSent) {
-          // Update alert to mark email as sent
-          // Note: We'd need to add an update method to storage for this
           console.log(`Alert email sent for ${website.name}`);
         }
       } catch (emailError) {

@@ -165,7 +165,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { monitorWebsite } = await import("./monitoring");
-      await monitorWebsite(id);
+      await monitorWebsite(id, true); // Pass true for manual check
       res.json({ message: "Check completed" });
     } catch (error) {
       console.error('Error running manual check:', error);
