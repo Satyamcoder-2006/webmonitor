@@ -159,7 +159,7 @@ export class DatabaseStorage implements IStorage {
       .from(websites)
       .then(rows => rows[0]?.count || 0);
 
-    // Get latest status for each website
+    // Get latest status for each website - simplified approach
     const latestStatuses = await db
       .select({
         websiteId: monitoringLogs.websiteId,
@@ -167,25 +167,22 @@ export class DatabaseStorage implements IStorage {
         responseTime: monitoringLogs.responseTime,
       })
       .from(monitoringLogs)
-      .innerJoin(
-        db
-          .select({
-            websiteId: monitoringLogs.websiteId,
-            maxCheckedAt: sql<Date>`max(${monitoringLogs.checkedAt})`.as('maxCheckedAt'),
-          })
-          .from(monitoringLogs)
-          .groupBy(monitoringLogs.websiteId)
-          .as('latest'),
-        and(
-          eq(monitoringLogs.websiteId, sql`latest.websiteId`),
-          eq(monitoringLogs.checkedAt, sql`latest.maxCheckedAt`)
-        )
-      );
+      .orderBy(desc(monitoringLogs.checkedAt));
 
-    const sitesUp = latestStatuses.filter(s => s.status === 'up').length;
-    const sitesDown = latestStatuses.filter(s => s.status === 'down').length;
+    // Group by website ID to get only the latest status for each
+    const latestStatusByWebsite = new Map();
+    latestStatuses.forEach(status => {
+      if (!latestStatusByWebsite.has(status.websiteId)) {
+        latestStatusByWebsite.set(status.websiteId, status);
+      }
+    });
     
-    const validResponseTimes = latestStatuses
+    const uniqueLatestStatuses = Array.from(latestStatusByWebsite.values());
+
+    const sitesUp = uniqueLatestStatuses.filter(s => s.status === 'up').length;
+    const sitesDown = uniqueLatestStatuses.filter(s => s.status === 'down').length;
+    
+    const validResponseTimes = uniqueLatestStatuses
       .filter(s => s.responseTime !== null)
       .map(s => s.responseTime!);
     
