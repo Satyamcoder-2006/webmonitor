@@ -9,7 +9,8 @@
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "set NODE_ENV=production && node dist/index.js",
     "check": "tsc",
-    "db:push": "set DATABASE_URL=%DATABASE_URL%&& npx drizzle-kit push --config drizzle.config.ts"
+    "db:generate": "cross-env npx drizzle-kit generate --config drizzle.config.cjs",
+    "db:push": "npm run db:generate && cross-env tsx db-push.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -66,6 +67,7 @@
     "nodemailer": "^7.0.3",
     "passport": "^0.7.0",
     "passport-local": "^1.0.0",
+    "postgres": "^3.4.7",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.3.1",
