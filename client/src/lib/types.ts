@@ -34,19 +34,3 @@ export interface PerformanceData {
   hour: string;
   averageResponseTime: number;
 }
-
-export interface AlertItem {
-  id: number;
-  websiteId: number;
-  website: {
-    id: number;
-    name: string;
-    url: string;
-  };
-  alertType: string;
-  message: string;
-  emailSent: boolean;
-  sentAt: string;
-  read: boolean;
-  createdAt: string;
-}

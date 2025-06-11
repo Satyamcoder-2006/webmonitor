@@ -17,10 +17,6 @@ export interface IStorage {
   getLatestLogForWebsite(websiteId: number): Promise<MonitoringLog | undefined>;
   getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website | null })[]>;
 
-  // Alert operations
-  createAlert(alert: InsertAlert): Promise<Alert>;
-  getRecentAlerts(limit?: number): Promise<(Alert & { website: Website | null })[]>;
-
   // Analytics
   getWebsiteStats(): Promise<{
     totalSites: number;
@@ -45,17 +41,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getWebsite(id: number): Promise<Website | undefined> {
-    const [website] = await db.select().from(websites).where(eq(websites.id, id));
-    return website || undefined;
+    const [website] = await db
+      .select()
+      .from(websites)
+      .where(eq(websites.id, id));
+    
+    return website;
   }
 
   async getActiveWebsites(): Promise<Website[]> {
-    return await db.select().from(websites).where(eq(websites.isActive, true));
+    return db
+      .select()
+      .from(websites)
+      .where(eq(websites.isActive, true))
+      .orderBy(websites.name);
   }
 
   async updateWebsite(id: number, updates: UpdateWebsite): Promise<Website | undefined> {
-    return db.transaction(async (tx) => {
-      const [updatedWebsite] = await tx
+    const [updated] = await db
         .update(websites)
         .set({
           ...updates,
@@ -63,8 +66,8 @@ export class DatabaseStorage implements IStorage {
         })
         .where(eq(websites.id, id))
         .returning();
-      return updatedWebsite;
-    });
+    
+    return updated;
   }
 
   async deleteWebsite(id: number): Promise<boolean> {
@@ -136,30 +139,6 @@ export class DatabaseStorage implements IStorage {
     .orderBy(desc(monitoringLogs.checkedAt));
   }
 
-  async createAlert(alert: InsertAlert): Promise<Alert> {
-    const [result] = await db
-      .insert(alerts)
-      .values(alert)
-      .returning();
-    return result;
-  }
-
-  async getRecentAlerts(limit = 100): Promise<(Alert & { website: Website | null })[]> {
-    return await db.select({
-      id: alerts.id,
-      websiteId: alerts.websiteId,
-      alertType: alerts.alertType,
-      message: alerts.message,
-      sentAt: alerts.sentAt,
-      emailSent: alerts.emailSent,
-      website: websites,
-    })
-    .from(alerts)
-    .leftJoin(websites, eq(alerts.websiteId, websites.id))
-    .orderBy(desc(alerts.sentAt))
-    .limit(limit);
-  }
-
   async getWebsiteStats(): Promise<{
     totalSites: number;
     sitesUp: number;
@@ -194,14 +173,13 @@ export class DatabaseStorage implements IStorage {
       ? Math.round(validResponseTimes.reduce((a, b) => a + b, 0) / validResponseTimes.length)
       : 0;
 
-    // Calculate uptime from last 24 hours
-    const last24h = await db
+    // Calculate uptime from all historical logs
+    const allLogs = await db
       .select({ status: monitoringLogs.status })
-      .from(monitoringLogs)
-      .where(gte(monitoringLogs.checkedAt, new Date(Date.now() - 24 * 60 * 60 * 1000)));
+      .from(monitoringLogs);
     
-    const uptime = last24h.length > 0 
-      ? Math.round((last24h.filter(l => l.status === 'up').length / last24h.length) * 100 * 10) / 10
+    const uptime = allLogs.length > 0 
+      ? Math.round((allLogs.filter(l => l.status === 'up').length / allLogs.length) * 100 * 10) / 10
       : 100;
 
     return {

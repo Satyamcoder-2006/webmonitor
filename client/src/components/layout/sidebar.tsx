@@ -6,7 +6,6 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: BarChart3, current: true },
   { name: 'Add Website', href: '/add', icon: Plus, current: false },
   { name: 'Analytics', href: '/analytics', icon: Activity, current: false },
-  { name: 'Alerts', href: '/alerts', icon: Bell, current: false },
   { name: 'Settings', href: '/settings', icon: Settings, current: false },
 ];
 

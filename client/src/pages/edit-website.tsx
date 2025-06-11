@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -5,21 +6,34 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { createWebsiteSchema } from "@shared/schema";
-import type { CreateWebsite } from "@shared/schema";
-import { useLocation } from "wouter";
+import { updateWebsiteSchema } from "@shared/schema";
+import type { UpdateWebsite, Website } from "@shared/schema";
+import { useLocation, useParams } from "wouter";
 import Sidebar from "@/components/layout/sidebar";
+import { Loader2 } from "lucide-react";
 
-export default function AddWebsite() {
+export default function EditWebsite() {
+  const params = useParams();
+  const websiteId = parseInt(params.id);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const form = useForm<CreateWebsite>({
-    resolver: zodResolver(createWebsiteSchema),
+  // Fetch website data
+  const { data: website, isLoading } = useQuery({
+    queryKey: [`/api/websites/${websiteId}`],
+    queryFn: async () => {
+      const response = await apiRequest("GET", `/api/websites/${websiteId}`);
+      return response.json() as Promise<Website>;
+    },
+    enabled: !isNaN(websiteId),
+  });
+
+  const form = useForm<UpdateWebsite>({
+    resolver: zodResolver(updateWebsiteSchema),
     defaultValues: {
       name: "",
       url: "",
@@ -29,39 +43,84 @@ export default function AddWebsite() {
     },
   });
 
-  const addWebsiteMutation = useMutation({
-    mutationFn: async (newWebsite: CreateWebsite) => {
-      await apiRequest("POST", "/api/websites", newWebsite);
+  // Update form values when website data is loaded
+  useEffect(() => {
+    if (website) {
+      form.reset({
+        name: website.name,
+        url: website.url,
+        email: website.email,
+        checkInterval: website.checkInterval,
+        isActive: website.isActive,
+      });
+    }
+  }, [website, form]);
+
+  const updateWebsiteMutation = useMutation({
+    mutationFn: async (updatedWebsite: UpdateWebsite) => {
+      await apiRequest("PATCH", `/api/websites/${websiteId}`, updatedWebsite);
     },
     onSuccess: () => {
       toast({
-        title: "Website added",
-        description: "Your website has been added successfully.",
+        title: "Website updated",
+        description: "Your website has been updated successfully.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
-      setLocation("/dashboard");
+      queryClient.invalidateQueries({ queryKey: [`/api/websites/${websiteId}`] });
+      setLocation("/");
     },
     onError: (error: Error) => {
       toast({
-        title: "Failed to add website",
+        title: "Failed to update website",
         description: error.message,
         variant: "destructive",
       });
     },
   });
 
-  const onSubmit = (data: CreateWebsite) => {
-    addWebsiteMutation.mutate(data);
+  const onSubmit = (data: UpdateWebsite) => {
+    updateWebsiteMutation.mutate(data);
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex h-screen bg-gray-50">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          <p className="mt-2 text-gray-600">Loading website data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!website) {
+    return (
+      <div className="flex h-screen bg-gray-50">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden items-center justify-center">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-red-600">Website Not Found</h1>
+            <p className="mt-2 text-gray-600">The website you're trying to edit doesn't exist.</p>
+            <Button 
+              className="mt-4"
+              onClick={() => setLocation("/")}
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    
     <div className="flex h-screen bg-gray-50">
       <Sidebar />
       
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b">
-          <h1 className="text-2xl font-bold">Add New Website</h1>
+          <h1 className="text-2xl font-bold">Edit Website</h1>
           <Button 
             variant="outline" 
             onClick={() => setLocation("/")}
@@ -94,8 +153,8 @@ export default function AddWebsite() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="checkInterval">Check Interval (minutes)</Label>
-              <Select
-                value={form.watch("checkInterval").toString()}
+              <Select 
+                value={form.watch("checkInterval")?.toString()} 
                 onValueChange={(value) => form.setValue("checkInterval", parseInt(value))}
               >
                 <SelectTrigger>
@@ -104,7 +163,7 @@ export default function AddWebsite() {
                 <SelectContent>
                   <SelectItem value="1">1 minute</SelectItem>
                   <SelectItem value="5">5 minutes</SelectItem>
-                  <SelectItem value="10">10 minutes</SelectItem>
+                  <SelectItem value="15">15 minutes</SelectItem>
                   <SelectItem value="30">30 minutes</SelectItem>
                   <SelectItem value="60">1 hour</SelectItem>
                 </SelectContent>
@@ -121,9 +180,20 @@ export default function AddWebsite() {
               />
               <Label htmlFor="isActive">Active Monitoring</Label>
             </div>
-            <div className="flex justify-end">
-              <Button type="submit" disabled={addWebsiteMutation.isPending} className="bg-blue-600 hover:bg-blue-700">
-                {addWebsiteMutation.isPending ? "Adding..." : "Add Website"}
+            <div className="flex justify-end space-x-3">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => setLocation("/")}
+              >
+                Cancel
+              </Button>
+              <Button 
+                type="submit" 
+                disabled={updateWebsiteMutation.isPending} 
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {updateWebsiteMutation.isPending ? "Updating..." : "Update Website"}
               </Button>
             </div>
           </form>
@@ -132,7 +202,3 @@ export default function AddWebsite() {
     </div>
   );
 }
-
-
-
-

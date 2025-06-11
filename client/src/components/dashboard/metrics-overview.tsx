@@ -1,12 +1,77 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle, XCircle, Clock, TrendingUp } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DashboardStats } from "@/lib/types";
+import { useState, useEffect, useCallback } from "react";
 
 export default function MetricsOverview() {
+  const queryClient = useQueryClient();
+  const [websocket, setWebsocket] = useState<WebSocket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats"],
   });
+
+  // WebSocket setup function
+  const setupWebSocket = useCallback(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsPort = import.meta.env.VITE_WS_PORT || '5001';
+    const ws = new WebSocket(`${protocol}//${window.location.hostname}:${wsPort}`);
+    
+    ws.onopen = () => {
+      console.log('MetricsOverview WebSocket connected');
+      setIsConnected(true);
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'connected') {
+          console.log('MetricsOverview WebSocket connection confirmed:', data.message);
+          return;
+        }
+        
+        if (data.type === 'status_update') {
+          // Invalidate the /api/stats query to refetch latest metrics
+          queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+        }
+      } catch (error) {
+        console.error('Error processing MetricsOverview WebSocket message:', error);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('MetricsOverview WebSocket error:', error);
+      setIsConnected(false);
+    };
+    
+    ws.onclose = () => {
+      console.log('MetricsOverview WebSocket disconnected');
+      setIsConnected(false);
+      
+      // Attempt to reconnect after 5 seconds
+      setTimeout(() => {
+        if (ws === websocket) { // Only reconnect if this is still the current WebSocket
+          setupWebSocket();
+        }
+      }, 5000);
+    };
+    
+    setWebsocket(ws);
+  }, [queryClient]);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    setupWebSocket();
+    
+    return () => {
+      if (websocket) {
+        websocket.close();
+      }
+    };
+  }, [setupWebSocket]);
 
   if (isLoading) {
     return (
@@ -52,7 +117,7 @@ export default function MetricsOverview() {
     },
     {
       title: "Uptime",
-      value: `${stats?.uptime || 100}%`,
+      value: `${stats?.uptime || 0}%`,
       icon: TrendingUp,
       bgColor: "bg-yellow-100",
       iconColor: "text-yellow-600",
@@ -82,3 +147,5 @@ export default function MetricsOverview() {
     </div>
   );
 }
+
+

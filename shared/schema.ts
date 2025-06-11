@@ -12,6 +12,7 @@ export const websites = pgTable("websites", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   lastStatus: text("last_status").default('unknown').notNull(),
+  lastAlertSent: timestamp("last_alert_sent"), // Track when the last alert was sent
   lastEmailSent: timestamp("last_email_sent"),
 });
 
@@ -32,6 +33,7 @@ export const alerts = pgTable("alerts", {
   message: text("message").notNull(),
   sentAt: timestamp("sent_at").defaultNow().notNull(),
   emailSent: boolean("email_sent").notNull().default(false),
+  read: boolean("read").notNull().default(false),
 });
 
 export const siteStatus = pgTable("site_status", {

@@ -38,33 +38,7 @@ function createTransporter() {
     });
   }
   
-  // Outlook/Hotmail configuration
-  if (process.env.OUTLOOK_USER && process.env.OUTLOOK_PASS) {
-    return nodemailer.createTransport({
-      host: 'smtp-mail.outlook.com',
-      port: 587,
-      secure: false,
-      auth: {
-        user: process.env.OUTLOOK_USER,
-        pass: process.env.OUTLOOK_PASS,
-      },
-    });
-  }
-  
-  // Generic SMTP with username/password
-  if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-    return nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.EMAIL_PORT || '587'),
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-  }
-  
-  // Fallback to console logging if no email service is configured
+  // Return null if no email configuration is found
   return null;
 }
 
@@ -175,3 +149,4 @@ export async function sendTestEmail(to: string): Promise<boolean> {
     errorMessage: 'This is a test error message',
   });
 }
+

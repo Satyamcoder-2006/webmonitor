@@ -5,8 +5,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import AddWebsite from "@/pages/add-website";
+import EditWebsite from "@/pages/edit-website";
 import Analytics from "@/pages/analytics";
-import Alerts from "@/pages/alerts";
 import Settings from "@/pages/settings";
 import NotFound from "@/pages/not-found";
 
@@ -15,10 +15,10 @@ function Router() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/add" component={AddWebsite} />
+      <Route path="/edit/:id" component={EditWebsite} />
       <Route path="/analytics" component={Analytics} />
-      <Route path="/alerts" component={Alerts} />
       <Route path="/settings" component={Settings} />
-      <Route component={NotFound} />
+      <Route path="/:rest*" component={NotFound} />
     </Switch>
   );
 }
@@ -35,3 +35,6 @@ function App() {
 }
 
 export default App;
+
+
+

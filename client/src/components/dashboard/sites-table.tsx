@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,14 +7,100 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { WebsiteWithStatus } from "@/lib/types";
+import { useLocation } from "wouter";
 
 export default function SitesTable() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
+  const [websocket, setWebsocket] = useState<WebSocket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
 
   const { data: websites = [], isLoading } = useQuery<WebsiteWithStatus[]>({
     queryKey: ["/api/websites"],
   });
+
+  // WebSocket setup function
+  const setupWebSocket = useCallback(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsPort = import.meta.env.VITE_WS_PORT || '5001';
+    const ws = new WebSocket(`${protocol}//${window.location.hostname}:${wsPort}`);
+    
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      setIsConnected(true);
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('[WebSocket Client - SitesTable] Received message:', data);
+        
+        if (data.type === 'connected') {
+          console.log('WebSocket connection confirmed:', data.message);
+          return;
+        }
+        
+        if (data.type === 'status_update') {
+          // Update the website status in the cache
+          queryClient.setQueryData<WebsiteWithStatus[]>(["/api/websites"], (oldData) => {
+            if (!oldData) {
+              console.log('[WebSocket Client - SitesTable] No old data for /api/websites');
+              return oldData;
+            }
+            
+            const newData = oldData.map(website => {
+              if (website.id === data.websiteId) {
+                const updatedWebsite = {
+                  ...website,
+                  status: data.status,
+                  responseTime: data.responseTime,
+                  lastCheck: data.timestamp
+                };
+                console.log(`[WebSocket Client - SitesTable] Updating website ${website.name} (ID: ${website.id}) from ${website.status} to ${data.status}`);
+                return updatedWebsite;
+              }
+              return website;
+            });
+            console.log('[WebSocket Client - SitesTable] New data after update:', newData);
+            return newData;
+          });
+        }
+      } catch (error) {
+        console.error('Error processing WebSocket message:', error);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setIsConnected(false);
+    };
+    
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+      setIsConnected(false);
+      
+      // Attempt to reconnect after 5 seconds
+      setTimeout(() => {
+        if (ws === websocket) { // Only reconnect if this is still the current WebSocket
+          setupWebSocket();
+        }
+      }, 5000);
+    };
+    
+    setWebsocket(ws);
+  }, [queryClient]);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    setupWebSocket();
+    
+    return () => {
+      if (websocket) {
+        websocket.close();
+      }
+    };
+  }, [setupWebSocket]);
 
   const toggleWebsiteMutation = useMutation({
     mutationFn: async ({ id, isActive }: { id: number; isActive: boolean }) => {
@@ -140,12 +226,12 @@ export default function SitesTable() {
         <div className="flex items-center justify-between">
           <CardTitle>Monitored Websites</CardTitle>
           <div className="flex items-center space-x-2">
-            <Button variant="ghost" size="sm">
-              <Download className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/websites"] })}>
-              <RefreshCw className="h-4 w-4" />
-            </Button>
+            {/* Removed reconnection status display */}
+            {/* {!isConnected && (
+              <Badge variant="destructive" className="animate-pulse">
+                Reconnecting...
+              </Badge>
+            )} */}
           </div>
         </div>
       </CardHeader>
@@ -192,39 +278,39 @@ export default function SitesTable() {
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {formatLastCheck(website.lastCheck)}
                     </td>
-                    <td className="px-6 py-4 text-sm font-medium">
+                    <td className="px-6 py-4 text-sm text-gray-500">
                       <div className="flex items-center space-x-2">
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="text-green-600 hover:text-green-700"
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => checkWebsiteMutation.mutate(website.id)}
                           disabled={checkWebsiteMutation.isPending}
-                          title="Check now"
                         >
-                          <Play className="h-4 w-4" />
+                          <RefreshCw className="h-4 w-4" />
                         </Button>
-                        <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="text-gray-600 hover:text-gray-700"
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => toggleWebsiteMutation.mutate({ id: website.id, isActive: !website.isActive })}
                           disabled={toggleWebsiteMutation.isPending}
                         >
-                          <Pause className="h-4 w-4" />
+                          {website.isActive ? (
+                            <Pause className="h-4 w-4" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
                         </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="text-red-600 hover:text-red-700"
-                          onClick={() => {
-                            if (confirm(`Are you sure you want to delete ${website.name}?`)) {
-                              deleteWebsiteMutation.mutate(website.id);
-                            }
-                          }}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setLocation(`/websites/${website.id}/edit`)}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteWebsiteMutation.mutate(website.id)}
                           disabled={deleteWebsiteMutation.isPending}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -241,3 +327,5 @@ export default function SitesTable() {
     </Card>
   );
 }
+
+

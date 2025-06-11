@@ -4,8 +4,53 @@ import { storage } from "./storage";
 import { createWebsiteSchema, updateWebsiteSchema } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
+import { WebSocketServer } from 'ws';
+import { setBroadcastFunction } from "./monitoring";
+
+let wss: WebSocketServer;
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  const server = createServer(app);
+  
+  // Create WebSocket server on a different port
+  const wsPort = process.env.WS_PORT || 5001;
+  wss = new WebSocketServer({ 
+    port: Number(wsPort),
+    perMessageDeflate: false
+  });
+
+  console.log(`WebSocket server running on port ${wsPort}`);
+
+  // WebSocket connection handler
+  wss.on('connection', (ws) => {
+    console.log('New WebSocket connection');
+    
+    ws.on('error', (error) => {
+      console.error('WebSocket error:', error);
+    });
+
+    // Send initial connection success message
+    ws.send(JSON.stringify({ type: 'connected', message: 'Connected to WebSocket server' }));
+  });
+
+  // Broadcast function to send updates to all connected clients
+  const broadcastUpdate = (data: any) => {
+    if (!wss) return;
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(JSON.stringify(data));
+        } catch (error) {
+          console.error('Error sending WebSocket message:', error);
+        }
+      }
+    });
+  };
+
+  // Set the broadcast function in the monitoring module
+  setBroadcastFunction(broadcastUpdate);
+
   // Get all websites
   app.get("/api/websites", async (req, res) => {
     try {
@@ -29,6 +74,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching websites:', error);
       res.status(500).json({ message: "Failed to fetch websites" });
+    }
+  });
+
+  // Get a single website by ID
+  app.get("/api/websites/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid website ID" });
+      }
+
+      const website = await storage.getWebsite(id);
+      if (!website) {
+        return res.status(404).json({ message: "Website not found" });
+      }
+      res.json(website);
+    } catch (error) {
+      console.error('Error fetching website by ID:', error);
+      res.status(500).json({ message: "Failed to fetch website" });
     }
   });
 
@@ -148,18 +212,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get recent alerts
-  app.get("/api/alerts", async (req, res) => {
-    try {
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
-      const alerts = await storage.getRecentAlerts(limit);
-      res.json(alerts);
-    } catch (error) {
-      console.error('Error fetching alerts:', error);
-      res.status(500).json({ message: "Failed to fetch alerts" });
-    }
-  });
-
   // Manual check endpoint
   app.post("/api/websites/:id/check", async (req, res) => {
     try {
@@ -169,7 +221,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { monitorWebsite } = await import("./monitoring");
-      await monitorWebsite(id, true); // Pass true for manual check
+      const result = await monitorWebsite(id);
+      
+      // Broadcast the update to all connected clients
+      if (result) {
+        broadcastUpdate({
+          type: 'status_update',
+          websiteId: id,
+          status: result.status,
+          responseTime: result.responseTime,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
       res.json({ message: "Check completed" });
     } catch (error) {
       console.error('Error running manual check:', error);
@@ -181,7 +245,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/monitoring/run", async (req, res) => {
     try {
       const { runMonitoringCycle } = await import("./monitoring");
-      await runMonitoringCycle(true); // Pass true to indicate dashboard initiated
+      await runMonitoringCycle();
       res.json({ message: "Monitoring cycle completed" });
     } catch (error) {
       console.error('Error running monitoring cycle:', error);
@@ -348,33 +412,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Delete alert endpoint
-  app.delete("/api/alerts/:id", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid alert ID" });
-      }
-      
-      // Add delete alert method to storage if needed
-      res.json({ message: "Alert deleted" });
-    } catch (error) {
-      console.error('Error deleting alert:', error);
-      res.status(500).json({ message: "Failed to delete alert" });
-    }
-  });
-
-  // Mark all alerts as read
-  app.post("/api/alerts/mark-all-read", async (req, res) => {
-    try {
-      // Update all alerts to mark as read
-      res.json({ message: "All alerts marked as read" });
-    } catch (error) {
-      console.error('Error marking alerts as read:', error);
-      res.status(500).json({ message: "Failed to mark alerts as read" });
-    }
-  });
-
   // Settings endpoint
   app.get("/api/settings", async (req, res) => {
     try {
@@ -463,6 +500,5 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const httpServer = createServer(app);
-  return httpServer;
+  return server;
 }
