@@ -41,51 +41,107 @@ async function checkSSLCertificate(url: string): Promise<SSLCertificateInfo> {
         path: parsedUrl.pathname,
         rejectUnauthorized: false, // We want to check even invalid certs
         timeout: 10000, // 10 second timeout
+        agent: new https.Agent({
+          keepAlive: true, // Enable keepAlive for better performance
+          rejectUnauthorized: false,
+          // Use a small timeout to force new handshakes periodically
+          sessionTimeout: 1000,
+          maxCachedSessions: 1
+        })
       };
 
       const req = https.request(options, (res) => {
         const cert = res.socket as tls.TLSSocket;
-        const peerCert = cert.getPeerCertificate();
         
+        // Get certificate information using multiple methods
+        const peerCert = cert.getPeerCertificate(true) as tls.DetailedPeerCertificate;
+        const socketCert = cert.getPeerCertificate(true) as tls.DetailedPeerCertificate;
+        
+        // Try to get certificate info from the socket first
+        let certInfo = socketCert;
+        
+        // If socket cert is empty, try peer cert
+        if (Object.keys(socketCert).length === 0) {
+          certInfo = peerCert;
+        }
+        
+        // If both are empty, try getting raw cert
+        if (Object.keys(certInfo).length === 0) {
+          const rawCert = cert.getPeerCertificate() as tls.PeerCertificate;
+          if (Object.keys(rawCert).length > 0) {
+            certInfo = rawCert as tls.DetailedPeerCertificate;
+          }
+        }
+
+        // If we still don't have certificate info, try one more time with a new request
+        if (Object.keys(certInfo).length === 0) {
+          console.log(`[SSL Check] Retrying certificate check for ${url} with new connection`);
+          // Close this request and retry
+          req.destroy();
+          checkSSLCertificate(url).then(resolve).catch(err => {
+            console.error(`[SSL Check] Retry failed for ${url}:`, err);
+            resolve({ valid: false, errorMessage: err.message });
+          });
+          return;
+        }
+
+        // Log the certificate information
         console.log(`[SSL Check] Raw certificate data for ${url}:`, {
-          subject: peerCert.subject,
-          issuer: peerCert.issuer,
-          validFrom: peerCert.valid_from,
-          validTo: peerCert.valid_to,
-          serialNumber: peerCert.serialNumber,
-          fingerprint: peerCert.fingerprint,
+          subject: certInfo.subject,
+          issuer: certInfo.issuer,
+          validFrom: certInfo.valid_from,
+          validTo: certInfo.valid_to,
+          serialNumber: certInfo.serialNumber,
+          fingerprint: certInfo.fingerprint,
           authorized: cert.authorized,
           encrypted: cert.encrypted
         });
+
+        // If we have a valid encrypted connection but no certificate info,
+        // try to get it from the socket's secure context
+        if (cert.encrypted && cert.authorized && Object.keys(certInfo).length === 0) {
+          const secureContext = (cert as any)._handle?.secureContext;
+          if (secureContext) {
+            const ctxCert = secureContext.getCertificate() as tls.DetailedPeerCertificate;
+            if (ctxCert) {
+              certInfo = ctxCert;
+              console.log(`[SSL Check] Retrieved certificate from secure context for ${url}`);
+            }
+          }
+        }
         
         // Check if the connection is actually encrypted and authorized
         if (cert.encrypted && cert.authorized) {
           console.log(`[SSL Check] Connection is encrypted and authorized for ${url}`);
-          // If we have a valid encrypted connection, consider it valid even if we can't read the cert
           const now = new Date();
           
           // Try to get the expiry date from the certificate
           let expiryDate: Date | undefined;
           let daysLeft: number | undefined;
           
-          if (peerCert.valid_to) {
-            expiryDate = new Date(peerCert.valid_to);
+          if (certInfo.valid_to) {
+            expiryDate = new Date(certInfo.valid_to);
             daysLeft = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
             console.log(`[SSL Check] Found certificate expiry date for ${url}:`, {
               expiryDate: expiryDate.toISOString(),
               daysLeft
             });
           } else {
-            // If we can't read the expiry date but the connection is encrypted and authorized,
-            // we'll try to get it from the socket
-            const socketCert = cert.getPeerCertificate(true);
-            if (socketCert && socketCert.valid_to) {
-              expiryDate = new Date(socketCert.valid_to);
-              daysLeft = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-              console.log(`[SSL Check] Found certificate expiry date from socket for ${url}:`, {
-                expiryDate: expiryDate.toISOString(),
-                daysLeft
-              });
+            // If we can't get the expiry date from the certificate,
+            // try to get it from the socket's secure context
+            const secureContext = (cert as any)._handle?.secureContext;
+            if (secureContext) {
+              const ctxCert = secureContext.getCertificate() as tls.DetailedPeerCertificate;
+              if (ctxCert && ctxCert.valid_to) {
+                expiryDate = new Date(ctxCert.valid_to);
+                daysLeft = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                console.log(`[SSL Check] Found certificate expiry date from secure context for ${url}:`, {
+                  expiryDate: expiryDate.toISOString(),
+                  daysLeft
+                });
+              } else {
+                console.log(`[SSL Check] Could not determine expiry date for ${url}, but connection is secure`);
+              }
             } else {
               console.log(`[SSL Check] Could not determine expiry date for ${url}, but connection is secure`);
             }
@@ -100,7 +156,7 @@ async function checkSSLCertificate(url: string): Promise<SSLCertificateInfo> {
           return;
         }
         
-        if (Object.keys(peerCert).length === 0) {
+        if (Object.keys(certInfo).length === 0) {
           console.warn(`[SSL Check] No certificate presented for ${url}`);
           resolve({ valid: false, errorMessage: 'No SSL certificate presented' });
           return;
@@ -110,8 +166,8 @@ async function checkSSLCertificate(url: string): Promise<SSLCertificateInfo> {
         let valid = true;
         let errorMessage: string | undefined;
         
-        if (peerCert.valid_to) {
-          const expiryDate = new Date(peerCert.valid_to);
+        if (certInfo.valid_to) {
+          const expiryDate = new Date(certInfo.valid_to);
           const now = new Date();
           const daysLeft = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
           
@@ -121,12 +177,15 @@ async function checkSSLCertificate(url: string): Promise<SSLCertificateInfo> {
           if (!valid) {
             errorMessage = 'Certificate has expired';
             console.warn(`[SSL Check] Certificate expired for ${url}`);
-          } else if (cert.authorizationError) {
+          }
+          
+          // Check for authorization errors
+          if (cert.authorizationError) {
             // Log the error but don't necessarily mark as invalid
             console.warn(`[SSL Check] Authorization warning for ${url}:`, cert.authorizationError);
             
             // Only mark as invalid for serious errors, not just self-signed or common issues
-            const error = cert.authorizationError.toLowerCase();
+            const authError = cert.authorizationError ? cert.authorizationError.toString().toLowerCase() : '';
             const commonIssues = [
               'self signed certificate',
               'self-signed certificate',
@@ -138,11 +197,11 @@ async function checkSSLCertificate(url: string): Promise<SSLCertificateInfo> {
               'unable to get issuer certificate'
             ];
             
-            const isCommonIssue = commonIssues.some(issue => error.includes(issue));
+            const isCommonIssue = commonIssues.some(issue => authError.includes(issue));
             
             if (!isCommonIssue) {
               valid = false;
-              errorMessage = cert.authorizationError;
+              errorMessage = cert.authorizationError ? cert.authorizationError.toString() : 'Unknown authorization error';
               console.warn(`[SSL Check] Marking certificate as invalid for ${url} due to: ${errorMessage}`);
             } else {
               console.log(`[SSL Check] Ignoring common SSL warning for ${url}: ${cert.authorizationError}`);
@@ -295,82 +354,100 @@ async function checkWebsite(url: string): Promise<MonitoringResult> {
 const monitoringIntervals = new Map<number, NodeJS.Timeout>();
 
 async function monitorWebsite(websiteId: number): Promise<MonitoringResult | undefined> {
-  const website = await storage.getWebsite(websiteId);
-  if (!website) {
-    console.error(`[monitorWebsite] Website ${websiteId} not found`);
-    return;
-  }
+  try {
+    const website = await storage.getWebsite(websiteId);
+    if (!website) {
+      console.error(`[monitorWebsite] Website ${websiteId} not found`);
+      return;
+    }
 
-  const result = await checkWebsite(website.url);
-  const now = new Date();
+    const result = await checkWebsite(website.url);
+    const now = new Date();
 
-  // Create monitoring log
-  await storage.createMonitoringLog({
-    websiteId,
-    status: result.status,
-    httpStatus: result.httpStatus,
-    responseTime: result.responseTime,
-    errorMessage: result.errorMessage,
-  });
-
-  // Broadcast the update to all connected clients
-  if (broadcastUpdate) {
-    broadcastUpdate({
-      type: 'status_update',
+    // Create monitoring log with SSL information
+    await storage.createMonitoringLog({
       websiteId,
       status: result.status,
-      responseTime: result.responseTime,
-      timestamp: now.toISOString(),
-      sslValid: result.sslValid,
-      sslExpiryDate: result.sslExpiryDate,
-      sslDaysLeft: result.sslDaysLeft
-    });
-  }
-
-  // Check if we need to send an alert
-  let shouldSendAlert = false;
-  let message = '';
-
-  const lastStatus = website.lastStatus || 'unknown';
-
-  // Only send alert if the status has actually changed
-  if (result.status !== lastStatus) {
-    shouldSendAlert = true;
-    message = result.status === 'up' 
-      ? `Website ${website.name} is back up!`
-      : `Website ${website.name} is down! ${result.errorMessage ? `Error: ${result.errorMessage}` : ''}`;
-  }
-
-  // Check if SSL certificate is expiring soon (30 days or less)
-  if (result.sslValid === true && result.sslDaysLeft !== null && result.sslDaysLeft <= 30) {
-    shouldSendAlert = true;
-    message = `SSL Certificate for ${website.name} is expiring in ${result.sslDaysLeft} days!`;
-  }
-
-  // Send alert if needed
-  if (shouldSendAlert) {
-    await sendAlert(website.email, {
-      websiteName: website.name,
-      websiteUrl: website.url,
-      status: result.status,
-      message,
-      timestamp: now,
+      httpStatus: result.httpStatus,
       responseTime: result.responseTime,
       errorMessage: result.errorMessage,
     });
-  }
 
-  // Update website with status and SSL information
-  await storage.updateWebsite(website.id, {
-    lastStatus: result.status,
-    sslValid: result.sslValid,
-    sslExpiryDate: result.sslExpiryDate,
-    sslDaysLeft: result.sslDaysLeft
-  });
-  
-  console.log(`${website.name}: ${result.status} (${result.responseTime || 'N/A'}ms) | SSL: ${result.sslValid === true ? 'Valid' : result.sslValid === false ? 'Invalid' : 'N/A'} ${result.sslDaysLeft ? `(${result.sslDaysLeft} days left)` : ''}`);
-  
-  return result;
+    // Only update SSL information if it's an HTTPS URL and we have valid SSL data
+    if (website.url.startsWith('https://') && result.sslValid !== null) {
+      // Update website with status and SSL information
+      await storage.updateWebsite(website.id, {
+        lastStatus: result.status,
+        sslValid: result.sslValid,
+        sslExpiryDate: result.sslExpiryDate,
+        sslDaysLeft: result.sslDaysLeft
+      });
+    } else {
+      // Update only the status if it's not HTTPS or we don't have SSL data
+      await storage.updateWebsite(website.id, {
+        lastStatus: result.status
+      });
+    }
+
+    // Broadcast the update to all connected clients
+    if (broadcastUpdate) {
+      broadcastUpdate({
+        type: 'status_update',
+        websiteId,
+        status: result.status,
+        responseTime: result.responseTime,
+        timestamp: now.toISOString(),
+        sslValid: result.sslValid,
+        sslExpiryDate: result.sslExpiryDate,
+        sslDaysLeft: result.sslDaysLeft
+      });
+    }
+
+    // Check if we need to send an alert
+    let shouldSendAlert = false;
+    let message = '';
+
+    const lastStatus = website.lastStatus || 'unknown';
+
+    // Only send alert if the status has actually changed
+    if (result.status !== lastStatus) {
+      shouldSendAlert = true;
+      message = result.status === 'up' 
+        ? `Website ${website.name} is back up!`
+        : `Website ${website.name} is down! ${result.errorMessage ? `Error: ${result.errorMessage}` : ''}`;
+    }
+
+    // Check if SSL certificate is expiring soon (30 days or less)
+    if (result.sslValid === true && typeof result.sslDaysLeft === 'number' && result.sslDaysLeft <= 30) {
+      shouldSendAlert = true;
+      message = `SSL Certificate for ${website.name} is expiring in ${result.sslDaysLeft} days!`;
+    }
+
+    // Send alert if needed
+    if (shouldSendAlert) {
+      await sendAlert(website.email, {
+        websiteName: website.name,
+        websiteUrl: website.url,
+        status: result.status,
+        message,
+        timestamp: now,
+        responseTime: result.responseTime,
+        errorMessage: result.errorMessage,
+      });
+    }
+    
+    console.log(`${website.name}: ${result.status} (${result.responseTime || 'N/A'}ms) | SSL: ${result.sslValid === true ? 'Valid' : result.sslValid === false ? 'Invalid' : 'N/A'} ${result.sslDaysLeft ? `(${result.sslDaysLeft} days left)` : ''}`);
+    
+    return result;
+  } catch (error) {
+    console.error(`Error monitoring website ${websiteId}:`, error);
+    // Return a default error result
+    return {
+      status: 'error',
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      sslValid: null
+    };
+  }
 }
 
 export async function runMonitoringCycle() {
