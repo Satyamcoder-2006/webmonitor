@@ -14,32 +14,48 @@ import type { UpdateWebsite, Website } from "@shared/schema";
 import { useLocation, useParams } from "wouter";
 import Sidebar from "@/components/layout/sidebar";
 import { Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { X } from "lucide-react";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
+import { Skeleton } from "@/components/ui/skeleton";
+import { z } from "zod";
 
 export default function EditWebsite() {
   const params = useParams();
-  const websiteId = parseInt(params.id);
+  const websiteId = parseInt(params.id as string);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [currentTag, setCurrentTag] = useState('');
 
-  // Fetch website data
   const { data: website, isLoading } = useQuery({
     queryKey: [`/api/websites/${websiteId}`],
     queryFn: async () => {
       const response = await apiRequest("GET", `/api/websites/${websiteId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch website');
+      }
       return response.json() as Promise<Website>;
     },
     enabled: !isNaN(websiteId),
   });
 
-  const form = useForm<UpdateWebsite>({
-    resolver: zodResolver(updateWebsiteSchema),
+  const formSchema = z.object({
+    name: z.string().min(1, "Name is required"),
+    url: z.string().url("Please enter a valid URL"),
+    email: z.string().email("Please enter a valid email"),
+    checkInterval: z.number().min(1, "Check interval must be at least 1 minute").max(60, "Check interval cannot exceed 60 minutes"),
+    customTags: z.record(z.string()).optional(),
+  });
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
       url: "",
       email: "",
       checkInterval: 5,
-      isActive: true,
+      customTags: {},
     },
   });
 
@@ -51,22 +67,26 @@ export default function EditWebsite() {
         url: website.url,
         email: website.email,
         checkInterval: website.checkInterval,
-        isActive: website.isActive,
+        customTags: website.customTags || {},
       });
     }
   }, [website, form]);
 
   const updateWebsiteMutation = useMutation({
-    mutationFn: async (updatedWebsite: UpdateWebsite) => {
-      await apiRequest("PATCH", `/api/websites/${websiteId}`, updatedWebsite);
+    mutationFn: async (data: z.infer<typeof formSchema>) => {
+      const response = await apiRequest("PATCH", `/api/websites/${websiteId}`, data);
+      if (!response.ok) {
+        throw new Error('Failed to update website');
+      }
+      return response.json();
     },
     onSuccess: () => {
-      toast({
-        title: "Website updated",
-        description: "Your website has been updated successfully.",
-      });
       queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
       queryClient.invalidateQueries({ queryKey: [`/api/websites/${websiteId}`] });
+      toast({
+        title: "Website updated",
+        description: "The website has been updated successfully.",
+      });
       setLocation("/");
     },
     onError: (error: Error) => {
@@ -78,8 +98,14 @@ export default function EditWebsite() {
     },
   });
 
-  const onSubmit = (data: UpdateWebsite) => {
+  const onSubmit = (data: z.infer<typeof formSchema>) => {
     updateWebsiteMutation.mutate(data);
+  };
+
+  const formatSSLExpiryDate = (expiryDate: string | Date | null) => {
+    if (!expiryDate) return 'N/A';
+    const date = new Date(expiryDate);
+    return date.toLocaleDateString();
   };
 
   if (isLoading) {
@@ -129,74 +155,186 @@ export default function EditWebsite() {
           </Button>
         </div>
         <div className="flex-grow p-4 overflow-y-auto">
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-lg mx-auto p-6 bg-white rounded-lg shadow">
-            <div className="space-y-2">
-              <Label htmlFor="name">Website Name</Label>
-              <Input id="name" {...form.register("name")} />
-              {form.formState.errors.name && (
-                <p className="text-red-500 text-sm">{form.formState.errors.name.message}</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="url">Website URL</Label>
-              <Input id="url" {...form.register("url")} placeholder="https://example.com" />
-              {form.formState.errors.url && (
-                <p className="text-red-500 text-sm">{form.formState.errors.url.message}</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Alert Email</Label>
-              <Input id="email" {...form.register("email")} type="email" placeholder="alerts@example.com" />
-              {form.formState.errors.email && (
-                <p className="text-red-500 text-sm">{form.formState.errors.email.message}</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="checkInterval">Check Interval (minutes)</Label>
-              <Select 
-                value={form.watch("checkInterval")?.toString()} 
-                onValueChange={(value) => form.setValue("checkInterval", parseInt(value))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select interval" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1">1 minute</SelectItem>
-                  <SelectItem value="5">5 minutes</SelectItem>
-                  <SelectItem value="15">15 minutes</SelectItem>
-                  <SelectItem value="30">30 minutes</SelectItem>
-                  <SelectItem value="60">1 hour</SelectItem>
-                </SelectContent>
-              </Select>
-              {form.formState.errors.checkInterval && (
-                <p className="text-red-500 text-sm">{form.formState.errors.checkInterval.message}</p>
-              )}
-            </div>
-            <div className="flex items-center space-x-2">
-              <Switch
-                id="isActive"
-                checked={form.watch("isActive")}
-                onCheckedChange={(checked) => form.setValue("isActive", checked)}
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-lg mx-auto p-6 bg-white rounded-lg shadow">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Website Name</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
-              <Label htmlFor="isActive">Active Monitoring</Label>
-            </div>
-            <div className="flex justify-end space-x-3">
-              <Button 
-                type="button" 
-                variant="outline" 
-                onClick={() => setLocation("/")}
-              >
-                Cancel
-              </Button>
-              <Button 
-                type="submit" 
-                disabled={updateWebsiteMutation.isPending} 
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                {updateWebsiteMutation.isPending ? "Updating..." : "Update Website"}
-              </Button>
-            </div>
-          </form>
+
+              <FormField
+                control={form.control}
+                name="url"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Website URL</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="https://example.com" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Alert Email</FormLabel>
+                    <FormControl>
+                      <Input {...field} type="email" placeholder="alerts@example.com" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* SSL Information */}
+              {website.url.startsWith('https://') && website.sslValid !== null && (
+                <div className="space-y-2 border p-4 rounded-lg bg-gray-50">
+                  <h3 className="text-lg font-semibold">SSL Certificate Information</h3>
+                  <p>Status: {
+                    website.sslValid ? 
+                    <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Valid</Badge> : 
+                    <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Invalid</Badge>
+                  }</p>
+                  <p>Expiry Date: {formatSSLExpiryDate(website.sslExpiryDate)}</p>
+                  <p>Days Left: {
+                    website.sslDaysLeft !== null ? (
+                      <span className={website.sslDaysLeft <= 30 ? "text-red-500 font-semibold" : ""}>
+                        {website.sslDaysLeft}
+                      </span>
+                    ) : 'N/A'
+                  }</p>
+                </div>
+              )}
+
+              <FormField
+                control={form.control}
+                name="checkInterval"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Check Interval (minutes)</FormLabel>
+                    <FormControl>
+                      <Input 
+                        type="number" 
+                        min={1} 
+                        max={60} 
+                        {...field} 
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      How often should we check this website? (1-60 minutes)
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="customTags"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Custom Tags</FormLabel>
+                    <FormControl>
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Add a tag"
+                            value={currentTag}
+                            onChange={(e) => setCurrentTag(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (currentTag.trim()) {
+                                  const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
+                                  field.onChange(newTags);
+                                  setCurrentTag('');
+                                }
+                              }
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              if (currentTag.trim()) {
+                                const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
+                                field.onChange(newTags);
+                                setCurrentTag('');
+                              }
+                            }}
+                          >
+                            Add
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(field.value || {}).map(([key, value]) => (
+                            <Badge
+                              key={key}
+                              variant="secondary"
+                              className="flex items-center gap-1"
+                            >
+                              {value}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newTags = { ...field.value };
+                                  delete newTags[key];
+                                  field.onChange(newTags);
+                                }}
+                                className="ml-1 hover:text-destructive"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="isActive"
+                  checked={form.watch("isActive")}
+                  onCheckedChange={(checked) => form.setValue("isActive", checked)}
+                />
+                <Label htmlFor="isActive">Active Monitoring</Label>
+              </div>
+              <div className="flex justify-end space-x-3">
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => setLocation("/")}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={updateWebsiteMutation.isPending} 
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  {updateWebsiteMutation.isPending ? "Updating..." : "Update Website"}
+                </Button>
+              </div>
+            </form>
+          </Form>
         </div>
       </div>
     </div>

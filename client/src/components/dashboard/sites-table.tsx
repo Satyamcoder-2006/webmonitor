@@ -8,8 +8,14 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { WebsiteWithStatus } from "@/lib/types";
 import { useLocation } from "wouter";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
-export default function SitesTable() {
+interface SitesTableProps {
+  searchQuery: string;
+  selectedTags: string[];
+}
+
+export default function SitesTable({ searchQuery, selectedTags }: SitesTableProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -18,6 +24,22 @@ export default function SitesTable() {
 
   const { data: websites = [], isLoading } = useQuery<WebsiteWithStatus[]>({
     queryKey: ["/api/websites"],
+  });
+
+  const filteredWebsites = websites.filter(website => {
+    console.log(`Website: ${website.name}, Custom Tags:`, website.customTags);
+    const matchesSearch = website.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          website.url.toLowerCase().includes(searchQuery.toLowerCase());
+
+    const hasSelectedTags = selectedTags.length === 0 ||
+                            (
+                              website.customTags && 
+                              selectedTags.some(selectedTag => 
+                                Object.keys(website.customTags).includes(selectedTag)
+                              )
+                            );
+
+    return matchesSearch && hasSelectedTags;
   });
 
   // WebSocket setup function
@@ -36,40 +58,41 @@ export default function SitesTable() {
         const data = JSON.parse(event.data);
         console.log('[WebSocket Client - SitesTable] Received message:', data);
         
-        if (data.type === 'connected') {
-          console.log('WebSocket connection confirmed:', data.message);
-          return;
-        }
-        
         if (data.type === 'status_update') {
           // Update the website status in the cache
-          queryClient.setQueryData<WebsiteWithStatus[]>(["/api/websites"], (oldData) => {
-            if (!oldData) {
-              console.log('[WebSocket Client - SitesTable] No old data for /api/websites');
-              return oldData;
-            }
+          queryClient.setQueryData<WebsiteWithStatus[]>(['/api/websites'], (oldData) => {
+            if (!oldData) return oldData;
             
-            const newData = oldData.map(website => {
+            return oldData.map(website => {
               if (website.id === data.websiteId) {
                 const updatedWebsite = {
                   ...website,
                   status: data.status,
                   responseTime: data.responseTime,
-                  lastCheck: data.timestamp
+                  lastCheck: data.timestamp,
                 };
-                console.log(`[WebSocket Client - SitesTable] Updating website ${website.name} (ID: ${website.id}) from ${website.status} to ${data.status}`);
+
+                // Only update SSL information for HTTPS URLs
+                if (website.url.startsWith('https://')) {
+                  updatedWebsite.sslValid = data.sslValid;
+                  updatedWebsite.sslExpiryDate = data.sslExpiryDate;
+                  updatedWebsite.sslDaysLeft = data.sslDaysLeft;
+                }
+
                 return updatedWebsite;
               }
               return website;
             });
-            console.log('[WebSocket Client - SitesTable] New data after update:', newData);
-            return newData;
           });
+    
+          // Also invalidate the stats query to update metrics
+          queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
         }
       } catch (error) {
         console.error('Error processing WebSocket message:', error);
       }
     };
+
     
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
@@ -195,6 +218,11 @@ export default function SitesTable() {
     return date.toLocaleDateString();
   };
 
+  const formatSSLExpiryDate = (expiryDate: string) => {
+    const date = new Date(expiryDate);
+    return date.toLocaleDateString();
+  };
+
   if (isLoading) {
     return (
       <Card>
@@ -236,94 +264,118 @@ export default function SitesTable() {
         </div>
       </CardHeader>
       
-      <CardContent className="p-0">
-        {websites.length === 0 ? (
+      {websites.length === 0 ? (
+        <CardContent className="p-0">
           <div className="text-center py-12">
             <Globe className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No websites monitored yet</h3>
             <p className="text-gray-500">Add your first website to start monitoring its status.</p>
           </div>
-        ) : (
+        </CardContent>
+      ) : (
+        <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Website</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Response Time</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Check</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {websites.map((website) => (
-                  <tr key={website.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center">
-                        <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center mr-3">
-                          <Globe className="text-blue-600 text-sm h-4 w-4" />
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[150px]">Website</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Response Time</TableHead>
+                  <TableHead>Last Check</TableHead>
+                  <TableHead>SSL Status</TableHead>
+                  <TableHead>SSL Expiry</TableHead>
+                  <TableHead>Tags</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredWebsites.map((website) => (
+                  <TableRow key={website.id}>
+                    <TableCell className="font-medium">
+                      <a href={`/website/${website.id}`} className="hover:underline">
+                        {website.name}
+                      </a>
+                      <p className="text-gray-500 text-sm truncate w-48">
+                        {website.url}
+                      </p>
+                    </TableCell>
+                    <TableCell>{getStatusBadge(website.status)}</TableCell>
+                    <TableCell>{formatResponseTime(website.responseTime)}</TableCell>
+                    <TableCell>{formatLastCheck(website.lastCheck)}</TableCell>
+                    <TableCell>
+                      {website.sslValid === true && <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Valid</Badge>}
+                      {website.sslValid === false && <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Invalid</Badge>}
+                      {website.sslValid === null && <Badge className="bg-gray-100 text-gray-800 hover:bg-gray-100">N/A</Badge>}
+                    </TableCell>
+                    <TableCell>
+                      {website.sslExpiryDate && website.sslDaysLeft !== null ? (
+                        <span className={website.sslDaysLeft <= 30 ? "text-red-500 font-semibold" : ""}>
+                          {formatSSLExpiryDate(website.sslExpiryDate)} ({website.sslDaysLeft} days left)
+                        </span>
+                      ) : (
+                        <span>N/A</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {website.customTags && Object.keys(website.customTags).length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {Object.keys(website.customTags).map(tag => (
+                            <Badge key={tag} variant="outline">
+                              {website.customTags[tag]}
+                            </Badge>
+                          ))}
                         </div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{website.url}</div>
-                          <div className="text-sm text-gray-500">{website.name}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      {getStatusBadge(website.status)}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {formatResponseTime(website.responseTime)}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      {formatLastCheck(website.lastCheck)}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      <div className="flex items-center space-x-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => checkWebsiteMutation.mutate(website.id)}
-                          disabled={checkWebsiteMutation.isPending}
-                        >
-                          <RefreshCw className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toggleWebsiteMutation.mutate({ id: website.id, isActive: !website.isActive })}
-                          disabled={toggleWebsiteMutation.isPending}
-                        >
-                          {website.isActive ? (
-                            <Pause className="h-4 w-4" />
-                          ) : (
-                            <Play className="h-4 w-4" />
-                          )}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setLocation(`/websites/${website.id}/edit`)}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => deleteWebsiteMutation.mutate(website.id)}
-                          disabled={deleteWebsiteMutation.isPending}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+                      ) : (
+                        <span className="text-gray-500">No tags</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right space-x-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => checkWebsiteMutation.mutate(website.id)}
+                        title="Check Now"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (website.isActive) {
+                            toggleWebsiteMutation.mutate({ id: website.id, isActive: false });
+                          } else {
+                            toggleWebsiteMutation.mutate({ id: website.id, isActive: true });
+                          }
+                        }}
+                        title={website.isActive ? "Pause Monitoring" : "Resume Monitoring"}
+                      >
+                        {website.isActive ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setLocation(`/edit/${website.id}`)}
+                        title="Edit"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => deleteWebsiteMutation.mutate(website.id)}
+                        title="Delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
-        )}
-      </CardContent>
+        </CardContent>
+      )}
     </Card>
   );
 }

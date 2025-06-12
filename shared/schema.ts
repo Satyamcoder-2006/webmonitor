@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -7,13 +7,19 @@ export const websites = pgTable("websites", {
   url: text("url").notNull().unique(),
   name: text("name").notNull(),
   email: text("email").notNull(),
-  checkInterval: integer("check_interval").notNull().default(60), // minutes
+  checkInterval: integer("check_interval").notNull().default(60), // seconds
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   lastStatus: text("last_status").default('unknown').notNull(),
   lastAlertSent: timestamp("last_alert_sent"), // Track when the last alert was sent
   lastEmailSent: timestamp("last_email_sent"),
+  // Add custom tags field
+  customTags: jsonb("custom_tags").default({}).notNull(),
+  // Add SSL monitoring fields
+  sslValid: boolean("ssl_valid"),
+  sslExpiryDate: timestamp("ssl_expiry_date"),
+  sslDaysLeft: integer("ssl_days_left"),
 });
 
 export const monitoringLogs = pgTable("monitoring_logs", {
@@ -49,8 +55,10 @@ export const createWebsiteSchema = z.object({
   url: z.string().url("Please enter a valid URL"),
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Please enter a valid email address"),
-  checkInterval: z.number().min(1).max(60).default(5),
+  checkInterval: z.number().min(1).max(3600).default(60), // 1 second to 1 hour
   isActive: z.boolean().default(true),
+  // Add custom tags
+  customTags: z.record(z.string()).optional().default({}),
 });
 
 export type CreateWebsite = z.infer<typeof createWebsiteSchema>;
@@ -91,3 +99,35 @@ export const insertSiteStatusSchema = createInsertSchema(siteStatus).pick({
 });
 export type InsertSiteStatus = z.infer<typeof insertSiteStatusSchema>;
 export type SiteStatus = typeof siteStatus.$inferSelect;
+
+export const visitors = pgTable("visitors", {
+  id: serial("id").primaryKey(),
+  visitorId: text("visitor_id").notNull(),
+  websiteId: integer("website_id").references(() => websites.id, { onDelete: 'cascade' }).notNull(),
+  url: text("url").notNull(),
+  referrer: text("referrer"),
+  userAgent: text("user_agent"),
+  ip: text("ip"),
+  screenWidth: integer("screen_width"),
+  screenHeight: integer("screen_height"),
+  language: text("language"),
+  duration: integer("duration"), // in seconds
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  isBot: boolean("is_bot").default(false).notNull(),
+});
+
+export const insertVisitorSchema = createInsertSchema(visitors).pick({
+  visitorId: true,
+  websiteId: true,
+  url: true,
+  referrer: true,
+  userAgent: true,
+  ip: true,
+  screenWidth: true,
+  screenHeight: true,
+  language: true,
+  duration: true,
+  isBot: true,
+});
+export type InsertVisitor = z.infer<typeof insertVisitorSchema>;
+export type Visitor = typeof visitors.$inferSelect;

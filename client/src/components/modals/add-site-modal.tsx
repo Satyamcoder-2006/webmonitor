@@ -1,9 +1,10 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { createWebsiteSchema } from "@shared/schema";
@@ -11,6 +12,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { CreateWebsite } from "@shared/schema";
+import { Badge } from "@/components/ui/badge";
+import { X } from "lucide-react";
+import { DialogFooter } from "@/components/ui/dialog";
+import { z } from "zod";
 
 interface AddSiteModalProps {
   isOpen: boolean;
@@ -20,31 +25,43 @@ interface AddSiteModalProps {
 export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [currentTag, setCurrentTag] = useState('');
 
-  const form = useForm<CreateWebsite>({
-    resolver: zodResolver(createWebsiteSchema),
+  const formSchema = z.object({
+    name: z.string().min(1, "Name is required"),
+    url: z.string().url("Please enter a valid URL"),
+    email: z.string().email("Please enter a valid email"),
+    checkInterval: z.number().min(1, "Check interval must be at least 1 minute").max(60, "Check interval cannot exceed 60 minutes"),
+    customTags: z.record(z.string()).optional(),
+  });
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
       url: "",
       email: "",
       checkInterval: 5,
-      isActive: true,
+      customTags: {},
     },
   });
 
   const addWebsiteMutation = useMutation({
-    mutationFn: async (newWebsite: CreateWebsite) => {
-      await apiRequest("POST", "/api/websites", newWebsite);
+    mutationFn: async (data: z.infer<typeof formSchema>) => {
+      const response = await apiRequest("POST", "/api/websites", data);
+      if (!response.ok) {
+        throw new Error('Failed to add website');
+      }
+      return response.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
       toast({
         title: "Website added",
-        description: "Your website has been added successfully.",
+        description: "The website has been added to monitoring.",
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/websites"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      form.reset();
       onClose();
+      form.reset();
     },
     onError: (error: Error) => {
       toast({
@@ -55,7 +72,7 @@ export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
     },
   });
 
-  const onSubmit = (data: CreateWebsite) => {
+  const onSubmit = (data: z.infer<typeof formSchema>) => {
     addWebsiteMutation.mutate(data);
   };
 
@@ -66,13 +83,28 @@ export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Add Website to Monitor</DialogTitle>
+          <DialogTitle>Add New Website</DialogTitle>
+          <DialogDescription>
+            Enter the details of the website you want to monitor.
+          </DialogDescription>
         </DialogHeader>
-        
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Website Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="My Website" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <FormField
               control={form.control}
               name="url"
@@ -86,94 +118,112 @@ export default function AddSiteModal({ isOpen, onClose }: AddSiteModalProps) {
                 </FormItem>
               )}
             />
-
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Display Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="My Website" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
             <FormField
               control={form.control}
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Email for Alerts</FormLabel>
+                  <FormLabel>Notification Email</FormLabel>
                   <FormControl>
-                    <Input placeholder="admin@example.com" type="email" {...field} />
+                    <Input placeholder="alerts@example.com" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
-
             <FormField
               control={form.control}
               name="checkInterval"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Check Interval</FormLabel>
-                  <Select onValueChange={(value) => field.onChange(parseInt(value))} defaultValue={field.value.toString()}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select check interval" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="5">Every 5 minutes</SelectItem>
-                      <SelectItem value="10">Every 10 minutes</SelectItem>
-                      <SelectItem value="15">Every 15 minutes</SelectItem>
-                      <SelectItem value="30">Every 30 minutes</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <FormLabel>Check Interval (minutes)</FormLabel>
+                  <FormControl>
+                    <Input 
+                      type="number" 
+                      min={1} 
+                      max={60} 
+                      {...field} 
+                      onChange={(e) => field.onChange(Number(e.target.value))}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    How often should we check this website? (1-60 minutes)
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
-
             <FormField
               control={form.control}
-              name="isActive"
+              name="customTags"
               render={({ field }) => (
-                <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                  <div className="space-y-0.5">
-                    <FormLabel className="text-base">Enable monitoring immediately</FormLabel>
-                  </div>
+                <FormItem>
+                  <FormLabel>Custom Tags</FormLabel>
                   <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Add a tag"
+                          value={currentTag}
+                          onChange={(e) => setCurrentTag(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (currentTag.trim()) {
+                                const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
+                                field.onChange(newTags);
+                                setCurrentTag('');
+                              }
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            if (currentTag.trim()) {
+                              const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
+                              field.onChange(newTags);
+                              setCurrentTag('');
+                            }
+                          }}
+                        >
+                          Add
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(field.value || {}).map(([key, value]) => (
+                          <Badge
+                            key={key}
+                            variant="secondary"
+                            className="flex items-center gap-1"
+                          >
+                            {value}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newTags = { ...field.value };
+                                delete newTags[key];
+                                field.onChange(newTags);
+                              }}
+                              className="ml-1 hover:text-destructive"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
                   </FormControl>
+                  <FormMessage />
                 </FormItem>
               )}
             />
-
-            <div className="flex space-x-3 pt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleClose}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={addWebsiteMutation.isPending}
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
-              >
+            <DialogFooter>
+              <Button type="submit" disabled={addWebsiteMutation.isPending}>
                 {addWebsiteMutation.isPending ? "Adding..." : "Add Website"}
               </Button>
-            </div>
+            </DialogFooter>
           </form>
         </Form>
       </DialogContent>

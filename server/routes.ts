@@ -6,48 +6,46 @@ import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { WebSocketServer } from 'ws';
 import { setBroadcastFunction } from "./monitoring";
+import WebSocket from 'ws';
 
 let wss: WebSocketServer;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const server = createServer(app);
   
-  // Create WebSocket server on a different port
+  // Set up WebSocket server
   const wsPort = process.env.WS_PORT || 5001;
   wss = new WebSocketServer({ 
     port: Number(wsPort),
     perMessageDeflate: false
   });
-
+  
   console.log(`WebSocket server running on port ${wsPort}`);
-
+  
   // WebSocket connection handler
   wss.on('connection', (ws) => {
-    console.log('New WebSocket connection');
+    console.log('New WebSocket connection established');
     
     ws.on('error', (error) => {
       console.error('WebSocket error:', error);
     });
-
-    // Send initial connection success message
-    ws.send(JSON.stringify({ type: 'connected', message: 'Connected to WebSocket server' }));
+    
+    ws.on('close', () => {
+      console.log('WebSocket connection closed');
+    });
   });
-
+  
   // Broadcast function to send updates to all connected clients
   const broadcastUpdate = (data: any) => {
-    if (!wss) return;
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        try {
+    if (wss) {
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify(data));
-        } catch (error) {
-          console.error('Error sending WebSocket message:', error);
         }
-      }
-    });
+      });
+    }
   };
-
+  
   // Set the broadcast function in the monitoring module
   setBroadcastFunction(broadcastUpdate);
 
@@ -101,6 +99,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = createWebsiteSchema.parse(req.body);
       const website = await storage.createWebsite(validatedData);
+      
+      // Schedule monitoring for the new website
+      const { updateWebsiteMonitoring } = await import("./monitoring");
+      updateWebsiteMonitoring(website);
+      
       res.status(201).json(website);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -128,6 +131,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Website not found" });
       }
       
+      // Update monitoring schedule if check_interval changed
+      if (updates.checkInterval !== undefined) {
+        const { updateWebsiteMonitoring } = await import("./monitoring");
+        updateWebsiteMonitoring(website);
+      }
+      
       res.json(website);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -149,6 +158,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
+      // Stop monitoring for this website
+      const { stopWebsiteMonitoring } = await import("./monitoring");
+      stopWebsiteMonitoring(id);
+      
       const deleted = await storage.deleteWebsite(id);
       if (!deleted) {
         return res.status(404).json({ message: "Website not found" });
@@ -492,7 +505,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Restart monitoring endpoint
   app.post("/api/monitoring/restart", async (req, res) => {
     try {
-      // In a real implementation, you'd restart the monitoring service
+      // Restart the monitoring service
+      const { startMonitoring } = await import("./monitoring");
+      await startMonitoring();
       res.json({ message: "Monitoring restarted successfully" });
     } catch (error) {
       console.error('Error restarting monitoring:', error);

@@ -11,6 +11,10 @@ export interface WebsiteWithStatus {
   responseTime: number | null;
   lastCheck: string | null;
   httpStatus: number | null;
+  customTags: Record<string, string>;
+  sslValid: boolean | null;
+  sslExpiryDate: string | null;
+  sslDaysLeft: number | null;
 }
 
 export interface ActivityItem {
@@ -28,6 +32,7 @@ export interface DashboardStats {
   sitesDown: number;
   averageResponseTime: number;
   uptime: number;
+  sslHealth: number;
 }
 
 export interface PerformanceData {

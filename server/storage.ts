@@ -25,6 +25,17 @@ export interface IStorage {
     averageResponseTime: number;
     uptime: number;
   }>;
+
+  // Visitor tracking
+  createVisitorLog(visitor: InsertVisitor): Promise<Visitor>;
+  updateVisitorSession(visitorId: string, websiteId: number, duration: number): Promise<boolean>;
+  getVisitorStats(websiteId: number, days: number): Promise<{
+    totalVisitors: number;
+    uniqueVisitors: number;
+    averageDuration: number;
+    bounceRate: number;
+    topReferrers: { referrer: string; count: number }[];
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -145,6 +156,7 @@ export class DatabaseStorage implements IStorage {
     sitesDown: number;
     averageResponseTime: number;
     uptime: number;
+    sslHealth: number;
   }> {
     const totalSites = await db
       .select({ count: sql<number>`count(*)` })
@@ -181,6 +193,40 @@ export class DatabaseStorage implements IStorage {
     const uptime = allLogs.length > 0 
       ? Math.round((allLogs.filter(l => l.status === 'up').length / allLogs.length) * 100 * 10) / 10
       : 100;
+      
+    // Get all websites for SSL health calculation
+    const allWebsites = await this.getWebsites();
+    
+    // Calculate SSL health percentage
+    const httpsWebsites = allWebsites.filter(site => site.url.startsWith('https://'));
+    const httpsCount = httpsWebsites.length;
+    
+    if (httpsCount === 0) {
+      // No HTTPS websites to check
+      return {
+        totalSites,
+        sitesUp,
+        sitesDown,
+        averageResponseTime,
+        uptime,
+        sslHealth: 100 // Default to 100% if no HTTPS sites
+      };
+    }
+    
+    // Count websites with valid SSL certificates
+    const validSSL = httpsWebsites.filter(site => site.sslValid === true).length;
+    
+    // Count websites with SSL certificates expiring soon (within 30 days)
+    const expiringSoon = httpsWebsites.filter(site => 
+      site.sslValid === true && 
+      site.sslDaysLeft !== null && 
+      site.sslDaysLeft <= 30
+    ).length;
+    
+    // Calculate SSL health percentage
+    // Formula: (valid certs - (expiring soon * 0.5)) / total https sites * 100
+    // This penalizes sites with expiring certificates but doesn't count them as completely invalid
+    const sslHealth = Math.round(((validSSL - (expiringSoon * 0.5)) / httpsCount) * 100);
 
     return {
       totalSites,
@@ -188,6 +234,100 @@ export class DatabaseStorage implements IStorage {
       sitesDown,
       averageResponseTime,
       uptime,
+      sslHealth: Math.max(0, Math.min(100, sslHealth)) // Ensure value is between 0-100
+    };
+  }
+  
+  async createVisitorLog(visitor: InsertVisitor): Promise<Visitor> {
+    // Check if it's a bot based on user agent
+    const botPattern = /bot|googlebot|crawler|spider|robot|crawling/i;
+    const isBot = botPattern.test(visitor.userAgent || '');
+    
+    const [result] = await db
+      .insert(visitors)
+      .values({ ...visitor, isBot })
+      .returning();
+    return result;
+  }
+  
+  async updateVisitorSession(visitorId: string, websiteId: number, duration: number): Promise<boolean> {
+    try {
+      await db
+        .update(visitors)
+        .set({ duration })
+        .where(
+          and(
+            eq(visitors.visitorId, visitorId),
+            eq(visitors.websiteId, websiteId)
+          )
+        );
+      return true;
+    } catch (error) {
+      console.error('Error updating visitor session:', error);
+      return false;
+    }
+  }
+  
+  async getVisitorStats(websiteId: number, days: number): Promise<{
+    totalVisitors: number;
+    uniqueVisitors: number;
+    averageDuration: number;
+    bounceRate: number;
+    topReferrers: { referrer: string; count: number }[];
+  }> {
+    const cutOff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    
+    // Get all visitors for this website in the time period
+    const allVisitors = await db
+      .select()
+      .from(visitors)
+      .where(
+        and(
+          eq(visitors.websiteId, websiteId),
+          gte(visitors.timestamp, cutOff),
+          eq(visitors.isBot, false)
+        )
+      );
+    
+    // Count total visitors
+    const totalVisitors = allVisitors.length;
+    
+    // Count unique visitors
+    const uniqueVisitorIds = new Set(allVisitors.map(v => v.visitorId));
+    const uniqueVisitors = uniqueVisitorIds.size;
+    
+    // Calculate average duration
+    const visitorsWithDuration = allVisitors.filter(v => v.duration !== null && v.duration > 0);
+    const averageDuration = visitorsWithDuration.length > 0
+      ? Math.round(visitorsWithDuration.reduce((sum, v) => sum + (v.duration || 0), 0) / visitorsWithDuration.length)
+      : 0;
+    
+    // Calculate bounce rate (visitors who stayed less than 10 seconds)
+    const bouncedVisitors = allVisitors.filter(v => v.duration !== null && v.duration < 10).length;
+    const bounceRate = totalVisitors > 0
+      ? Math.round((bouncedVisitors / totalVisitors) * 100)
+      : 0;
+    
+    // Get top referrers
+    const referrerCounts: Record<string, number> = {};
+    allVisitors.forEach(v => {
+      if (v.referrer) {
+        const domain = new URL(v.referrer).hostname;
+        referrerCounts[domain] = (referrerCounts[domain] || 0) + 1;
+      }
+    });
+    
+    const topReferrers = Object.entries(referrerCounts)
+      .map(([referrer, count]) => ({ referrer, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    
+    return {
+      totalVisitors,
+      uniqueVisitors,
+      averageDuration,
+      bounceRate,
+      topReferrers,
     };
   }
 }
