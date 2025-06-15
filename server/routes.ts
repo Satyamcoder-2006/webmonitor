@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { createWebsiteSchema, updateWebsiteSchema } from "@shared/schema";
+import { insertWebsiteSchema, selectWebsiteSchema } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { WebSocketServer } from 'ws';
@@ -97,7 +97,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new website
   app.post("/api/websites", async (req, res) => {
     try {
-      const validatedData = createWebsiteSchema.parse(req.body);
+      const validatedData = insertWebsiteSchema.parse(req.body);
       const website = await storage.createWebsite(validatedData);
       
       // Schedule monitoring for the new website
@@ -124,7 +124,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
-      const updates = updateWebsiteSchema.parse(req.body);
+      const updates = selectWebsiteSchema.parse(req.body);
       const website = await storage.updateWebsite(id, updates);
       
       if (!website) {
@@ -479,26 +479,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // System data clearing endpoints
   app.delete("/api/system/clear/:dataType", async (req, res) => {
     try {
-      const { dataType } = req.params;
-      
-      switch (dataType) {
-        case 'logs':
-          // Clear monitoring logs - would need to implement in storage
-          break;
-        case 'alerts':
-          // Clear alerts - would need to implement in storage
-          break;
-        case 'stats':
-          // Reset statistics - would need to implement in storage
-          break;
-        default:
-          return res.status(400).json({ message: "Invalid data type" });
+      const dataType = req.params.dataType;
+      if (!["logs", "websites"].includes(dataType)) {
+        return res.status(400).json({ message: "Invalid data type" });
       }
-      
-      res.json({ message: `${dataType} cleared successfully` });
+
+      if (dataType === "logs") {
+        await storage.clearMonitoringLogs();
+      } else if (dataType === "websites") {
+        await storage.clearAllWebsitesAndData();
+      }
+
+      res.status(200).json({ message: `${dataType} cleared successfully.` });
     } catch (error) {
-      console.error('Error clearing data:', error);
-      res.status(500).json({ message: "Failed to clear data" });
+      console.error(`Error clearing ${req.params.dataType} data:`, error);
+      res.status(500).json({ message: `Failed to clear ${req.params.dataType} data` });
     }
   });
 

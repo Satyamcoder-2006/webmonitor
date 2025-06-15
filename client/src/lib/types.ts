@@ -15,6 +15,7 @@ export interface WebsiteWithStatus {
   sslValid: boolean | null;
   sslExpiryDate: string | null;
   sslDaysLeft: number | null;
+  errorMessage: string | null;
 }
 
 export interface ActivityItem {

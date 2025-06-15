@@ -41,6 +41,14 @@ export default {
           DEFAULT: "var(--destructive)",
           foreground: "var(--destructive-foreground)",
         },
+        success: {
+          DEFAULT: "#22C55E", // Tailwind's green-500
+          foreground: "#FFFFFF",
+        },
+        danger: {
+          DEFAULT: "#EF4444", // Tailwind's red-500
+          foreground: "#FFFFFF",
+        },
         border: "var(--border)",
         input: "var(--input)",
         ring: "var(--ring)",

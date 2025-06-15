@@ -8,22 +8,24 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { useLocation } from "wouter";
-import Sidebar from "@/components/layout/sidebar";
+import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { X } from "lucide-react";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { z } from "zod";
 
 export default function AddWebsite() {
-  const [, setLocation] = useLocation();
+  const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [currentTag, setCurrentTag] = useState('');
 
   const formSchema = z.object({
     name: z.string().min(1, "Name is required"),
-    url: z.string().url("Please enter a valid URL"),
+    url: z.string().regex(
+      /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/,
+      "Please enter a valid URL (e.g., https://example.com, example.net)"
+    ),
     email: z.string().email("Please enter a valid email"),
     checkInterval: z.number().min(1, "Check interval must be at least 1 minute").max(60, "Check interval cannot exceed 60 minutes"),
     customTags: z.record(z.string()).optional(),
@@ -56,7 +58,7 @@ export default function AddWebsite() {
         title: "Website added",
         description: "The website has been added to monitoring.",
       });
-      setLocation("/");
+      navigate("/");
     },
     onError: (error: Error) => {
       toast({
@@ -72,30 +74,31 @@ export default function AddWebsite() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar />
+    <div className="space-y-6">
       
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between p-4 border-b">
-          <h1 className="text-2xl font-bold">Add New Website</h1>
+      <div className="glass-card rounded-lg p-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Add New Website</h1>
           <Button 
             variant="outline" 
-            onClick={() => setLocation("/")}
+            onClick={() => navigate("/")}
+            className="glass-button text-gray-900 dark:text-white"
           >
             Back to Dashboard
           </Button>
         </div>
-        <div className="flex-grow p-4 overflow-y-auto">
+        
+        <div className="mt-6">
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-lg mx-auto p-6 bg-white rounded-lg shadow">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-lg mx-auto p-6 glass-card rounded-lg shadow-lg">
               <FormField
                 control={form.control}
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Website Name</FormLabel>
+                    <FormLabel className="text-gray-900 dark:text-white">Website Name</FormLabel>
                     <FormControl>
-                      <Input placeholder="My Website" {...field} />
+                      <Input placeholder="My Website" {...field} className="glass-button text-gray-900 dark:text-white" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -107,9 +110,9 @@ export default function AddWebsite() {
                 name="url"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Website URL</FormLabel>
+                    <FormLabel className="text-gray-900 dark:text-white">Website URL</FormLabel>
                     <FormControl>
-                      <Input placeholder="https://example.com" {...field} />
+                      <Input placeholder="https://example.com" {...field} className="glass-button text-gray-900 dark:text-white" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -121,9 +124,9 @@ export default function AddWebsite() {
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Notification Email</FormLabel>
+                    <FormLabel className="text-gray-900 dark:text-white">Notification Email</FormLabel>
                     <FormControl>
-                      <Input placeholder="alerts@example.com" {...field} />
+                      <Input placeholder="alerts@example.com" {...field} className="glass-button text-gray-900 dark:text-white" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -135,7 +138,7 @@ export default function AddWebsite() {
                 name="checkInterval"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Check Interval (minutes)</FormLabel>
+                    <FormLabel className="text-gray-900 dark:text-white">Check Interval (minutes)</FormLabel>
                     <FormControl>
                       <Input 
                         type="number" 
@@ -143,9 +146,10 @@ export default function AddWebsite() {
                         max={60} 
                         {...field} 
                         onChange={(e) => field.onChange(Number(e.target.value))}
+                        className="glass-button text-gray-900 dark:text-white"
                       />
                     </FormControl>
-                    <FormDescription>
+                    <FormDescription className="text-gray-600 dark:text-gray-400">
                       How often should we check this website? (1-60 minutes)
                     </FormDescription>
                     <FormMessage />
@@ -158,7 +162,7 @@ export default function AddWebsite() {
                 name="customTags"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Custom Tags</FormLabel>
+                    <FormLabel className="text-gray-900 dark:text-white">Custom Tags</FormLabel>
                     <FormControl>
                       <div className="space-y-2">
                         <div className="flex gap-2">
@@ -176,10 +180,11 @@ export default function AddWebsite() {
                                 }
                               }
                             }}
+                            className="glass-button text-gray-900 dark:text-white"
                           />
                           <Button
                             type="button"
-                            variant="outline"
+                            variant={undefined}
                             onClick={() => {
                               if (currentTag.trim()) {
                                 const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
@@ -187,6 +192,7 @@ export default function AddWebsite() {
                                 setCurrentTag('');
                               }
                             }}
+                            className="bg-blue-600 hover:bg-blue-700 text-white"
                           >
                             Add
                           </Button>
@@ -196,20 +202,17 @@ export default function AddWebsite() {
                             <Badge
                               key={key}
                               variant="secondary"
-                              className="flex items-center gap-1"
+                              className="flex items-center gap-1 glass-button px-3 py-1"
                             >
                               {value}
-                              <button
-                                type="button"
+                              <X 
+                                className="ml-1 h-3 w-3 cursor-pointer text-gray-600 dark:text-gray-400" 
                                 onClick={() => {
                                   const newTags = { ...field.value };
                                   delete newTags[key];
                                   field.onChange(newTags);
                                 }}
-                                className="ml-1 hover:text-destructive"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
+                              />
                             </Badge>
                           ))}
                         </div>
@@ -220,29 +223,43 @@ export default function AddWebsite() {
                 )}
               />
 
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="isActive"
-                  checked={form.watch("isActive")}
-                  onCheckedChange={(checked) => form.setValue("isActive", checked)}
-                />
-                <Label htmlFor="isActive">Active Monitoring</Label>
-              </div>
+              <FormField
+                control={form.control}
+                name="isActive"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border border-gray-200/50 dark:border-gray-800/50 p-4 glass-card shadow-sm">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-base text-gray-900 dark:text-white">Active Monitoring</FormLabel>
+                      <FormDescription className="text-gray-600 dark:text-gray-400">
+                        Enable or disable active monitoring for this website.
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        className="data-[state=checked]:bg-blue-600 data-[state=unchecked]:bg-gray-200 dark:data-[state=unchecked]:bg-gray-700"
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
 
-              <div className="flex justify-end space-x-3">
+              <div className="flex justify-end gap-4">
                 <Button 
                   type="button" 
                   variant="outline" 
-                  onClick={() => setLocation("/")}
+                  onClick={() => navigate("/")} 
+                  className="glass-button text-gray-900 dark:text-white"
                 >
                   Cancel
                 </Button>
                 <Button 
                   type="submit" 
-                  disabled={addWebsiteMutation.isPending} 
-                  className="bg-blue-600 hover:bg-blue-700"
+                  variant={undefined}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
-                  {addWebsiteMutation.isPending ? "Adding..." : "Add Website"}
+                  Add Website
                 </Button>
               </div>
             </form>

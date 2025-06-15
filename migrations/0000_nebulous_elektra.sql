@@ -15,15 +15,9 @@ CREATE TABLE "monitoring_logs" (
 	"http_status" integer,
 	"response_time" integer,
 	"error_message" text,
-	"checked_at" timestamp DEFAULT now() NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "site_status" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"website_id" integer NOT NULL,
-	"status" text NOT NULL,
-	"response_time" integer,
-	"last_checked" timestamp DEFAULT now() NOT NULL
+	"checked_at" timestamp DEFAULT now() NOT NULL,
+	"change_type" text NOT NULL,
+	"previous_status" text
 );
 --> statement-breakpoint
 CREATE TABLE "websites" (
@@ -38,9 +32,12 @@ CREATE TABLE "websites" (
 	"last_status" text DEFAULT 'unknown' NOT NULL,
 	"last_alert_sent" timestamp,
 	"last_email_sent" timestamp,
+	"custom_tags" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"ssl_valid" boolean,
+	"ssl_expiry_date" timestamp,
+	"ssl_days_left" integer,
 	CONSTRAINT "websites_url_unique" UNIQUE("url")
 );
 --> statement-breakpoint
 ALTER TABLE "alerts" ADD CONSTRAINT "alerts_website_id_websites_id_fk" FOREIGN KEY ("website_id") REFERENCES "public"."websites"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "monitoring_logs" ADD CONSTRAINT "monitoring_logs_website_id_websites_id_fk" FOREIGN KEY ("website_id") REFERENCES "public"."websites"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "site_status" ADD CONSTRAINT "site_status_website_id_websites_id_fk" FOREIGN KEY ("website_id") REFERENCES "public"."websites"("id") ON DELETE cascade ON UPDATE no action;
+ALTER TABLE "monitoring_logs" ADD CONSTRAINT "monitoring_logs_website_id_websites_id_fk" FOREIGN KEY ("website_id") REFERENCES "public"."websites"("id") ON DELETE cascade ON UPDATE no action;

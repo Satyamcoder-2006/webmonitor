@@ -364,18 +364,21 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
     const result = await checkWebsite(website.url);
     const now = new Date();
 
-    // Create monitoring log with SSL information
-    await storage.createMonitoringLog({
-      websiteId,
-      status: result.status,
-      httpStatus: result.httpStatus,
-      responseTime: result.responseTime,
-      errorMessage: result.errorMessage,
-    });
+    // Only create monitoring log if there's a status change
+    if (result.status !== website.lastStatus) {
+      await storage.createMonitoringLog({
+        websiteId,
+        status: result.status,
+        httpStatus: result.httpStatus,
+        responseTime: result.responseTime,
+        errorMessage: result.errorMessage,
+        changeType: 'status_change',
+        previousStatus: website.lastStatus
+      });
+    }
 
-    // Only update SSL information if it's an HTTPS URL and we have valid SSL data
+    // Update website with status and SSL information
     if (website.url.startsWith('https://') && result.sslValid !== null) {
-      // Update website with status and SSL information
       await storage.updateWebsite(website.id, {
         lastStatus: result.status,
         sslValid: result.sslValid,
@@ -383,7 +386,6 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
         sslDaysLeft: result.sslDaysLeft
       });
     } else {
-      // Update only the status if it's not HTTPS or we don't have SSL data
       await storage.updateWebsite(website.id, {
         lastStatus: result.status
       });
@@ -407,14 +409,40 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
     let shouldSendAlert = false;
     let message = '';
 
+    // Helper function to get a detailed message for specific HTTP status codes
+    const getHttpStatusMessage = (httpStatus?: number): string => {
+      if (!httpStatus) return '';
+      switch (httpStatus) {
+        case 400: return '400 Bad Request: The server cannot or will not process the request due to an apparent client error.';
+        case 401: return '401 Unauthorized: The client must authenticate itself to get the requested response.';
+        case 403: return '403 Forbidden: The client does not have access rights to the content.';
+        case 404: return '404 Not Found: The server cannot find the requested resource.';
+        case 405: return '405 Method Not Allowed: The request method is not supported by the server for the requested resource.';
+        case 500: return '500 Internal Server Error: A generic error message, given when an unexpected condition was encountered.';
+        case 501: return '501 Not Implemented: The server either does not recognize the request method, or it lacks the ability to fulfil the request.';
+        case 502: return '502 Bad Gateway: The server was acting as a gateway or proxy and received an invalid response from the upstream server.';
+        case 503: return '503 Service Unavailable: The server cannot handle the request (because it is overloaded or down for maintenance).';
+        case 504: return '504 Gateway Timeout: The server was acting as a gateway or proxy and did not receive a timely response from the upstream server.';
+        case 505: return '505 HTTP Version Not Supported: The server does not support the HTTP version used in the request.';
+        default: return '';
+      }
+    };
+
     const lastStatus = website.lastStatus || 'unknown';
 
     // Only send alert if the status has actually changed
     if (result.status !== lastStatus) {
       shouldSendAlert = true;
-      message = result.status === 'up' 
-        ? `Website ${website.name} is back up!`
-        : `Website ${website.name} is down! ${result.errorMessage ? `Error: ${result.errorMessage}` : ''}`;
+      if (result.status === 'up') {
+        message = `Website ${website.name} is back up!`;
+      } else { // result.status === 'down'
+        let errorDetails = result.errorMessage ? `Error: ${result.errorMessage}` : '';
+        const httpStatusMessage = getHttpStatusMessage(result.httpStatus);
+        if (httpStatusMessage) {
+          errorDetails = `${httpStatusMessage}${errorDetails ? `. ${errorDetails}` : ''}`;
+        }
+        message = `Website ${website.name} is down! ${errorDetails}`;
+      }
     }
 
     // Check if SSL certificate is expiring soon (30 days or less)
@@ -441,7 +469,6 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
     return result;
   } catch (error) {
     console.error(`Error monitoring website ${websiteId}:`, error);
-    // Return a default error result
     return {
       status: 'error',
       errorMessage: error instanceof Error ? error.message : 'Unknown error',
