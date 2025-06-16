@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { updateWebsiteSchema } from "@shared/schema";
-import type { UpdateWebsite, Website } from "@shared/schema";
+import type { Website, Tag } from "@shared/schema";
 import { useNavigate, useParams } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import { X } from "lucide-react";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { z } from "zod";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function EditWebsite() {
   const params = useParams();
@@ -25,7 +26,18 @@ export default function EditWebsite() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [currentTag, setCurrentTag] = useState('');
+
+  // Fetch available tags
+  const { data: availableTags, isLoading: isLoadingTags } = useQuery<Tag[]>({
+    queryKey: ["/api/tags"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/tags");
+      if (!response.ok) {
+        throw new Error("Failed to fetch tags");
+      }
+      return response.json();
+    }
+  });
 
   const { data: website, isLoading } = useQuery({
     queryKey: [`/api/websites/${websiteId}`],
@@ -39,17 +51,12 @@ export default function EditWebsite() {
     enabled: !isNaN(websiteId),
   });
 
-  const formSchema = z.object({
-    name: z.string().min(1, "Name is required"),
-    url: z.string().regex(
-      /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/,
-      "Please enter a valid URL (e.g., https://example.com, example.net)"
-    ),
-    email: z.string().email("Please enter a valid email"),
-    checkInterval: z.number().min(1, "Check interval must be at least 1 minute").max(60, "Check interval cannot exceed 60 minutes"),
-    customTags: z.record(z.string()).optional(),
-    isActive: z.boolean(),
-  });
+  const formSchema = updateWebsiteSchema.extend({
+    customTags: z.record(z.string()).optional().transform(val => Object.keys(val || {})),
+  }).transform(data => ({
+    ...data,
+    customTags: data.customTags ? data.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {}) : {},
+  }));
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -63,19 +70,19 @@ export default function EditWebsite() {
     },
   });
 
-  // Update form values when website data is loaded
+  // Update form values when website data and available tags are loaded
   useEffect(() => {
-    if (website) {
+    if (website && availableTags) {
       form.reset({
         name: website.name,
         url: website.url,
         email: website.email,
         checkInterval: website.checkInterval,
-        customTags: (website.customTags || {}) as Record<string, string>,
+        customTags: Object.keys(website.customTags || {}),
         isActive: website.isActive,
       });
     }
-  }, [website, form]);
+  }, [website, availableTags, form]);
 
   const updateWebsiteMutation = useMutation({
     mutationFn: async (data: z.infer<typeof formSchema>) => {
@@ -113,7 +120,7 @@ export default function EditWebsite() {
     return date.toLocaleDateString();
   };
 
-  if (isLoading) {
+  if (isLoading || isLoadingTags) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -240,68 +247,60 @@ export default function EditWebsite() {
               )}
             />
 
+            {/* New Tags Select Field */}
             <FormField
               control={form.control}
               name="customTags"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Custom Tags</FormLabel>
+                  <FormLabel>Tags</FormLabel>
                   <FormControl>
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="Add a tag"
-                          value={currentTag}
-                          onChange={(e) => setCurrentTag(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              if (currentTag.trim()) {
-                                const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
-                                field.onChange(newTags);
-                                setCurrentTag('');
-                              }
-                            }
-                          }}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            if (currentTag.trim()) {
-                              const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
-                              field.onChange(newTags);
-                              setCurrentTag('');
-                            }
-                          }}
-                        >
-                          Add
-                        </Button>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(field.value || {}).map(([key, value]) => (
-                          <Badge
-                            key={key}
-                            variant="secondary"
-                            className="flex items-center gap-1"
-                          >
-                            {value}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const newTags = { ...field.value };
-                                delete newTags[key];
-                                field.onChange(newTags);
-                              }}
-                              className="ml-1 hover:text-destructive"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
+                    <Select
+                      value={Array.isArray(field.value) ? field.value.join(',') : ''}
+                      onValueChange={(newValue) => {
+                        const selectedValues = newValue.split(',').filter(Boolean);
+                        field.onChange(selectedValues);
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select tags" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {isLoadingTags ? (
+                          <SelectItem value="loading" disabled>
+                            Loading tags...
+                          </SelectItem>
+                        ) : availableTags && Array.isArray(availableTags) && availableTags.length > 0 ? (
+                          availableTags.map((tag) => (
+                            <SelectItem key={tag.id} value={tag.name}>
+                              <div className="flex items-center w-full">
+                                <Checkbox
+                                  checked={Array.isArray(field.value) && field.value.includes(tag.name)}
+                                  onCheckedChange={(checkedState) => {
+                                    const currentTags = Array.isArray(field.value) ? field.value : [];
+                                    if (checkedState) {
+                                      field.onChange([...currentTags, tag.name]);
+                                    } else {
+                                      field.onChange(currentTags.filter(t => t !== tag.name));
+                                    }
+                                  }}
+                                  className="mr-2"
+                                />
+                                {tag.name}
+                              </div>
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="no-tags" disabled>
+                            No tags available. Create tags from the Tags page.
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
                   </FormControl>
+                  <FormDescription>
+                    Assign existing tags to this website.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}

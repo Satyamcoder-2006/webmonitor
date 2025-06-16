@@ -10,6 +10,7 @@ import AddWebsite from "@/pages/add-website";
 import EditWebsite from "@/pages/edit-website";
 import Analytics from "@/pages/analytics";
 import Settings from "@/pages/settings";
+import TagsPage from "@/pages/tags";
 import NotFound from "@/pages/not-found";
 
 function App() {
@@ -25,9 +26,10 @@ function App() {
               <div className="container mx-auto px-4 py-8">
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
-                  <Route path="/add" element={<AddWebsite />} />
+                  <Route path="/websites/new" element={<AddWebsite />} />
                   <Route path="/edit/:id" element={<EditWebsite />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/tags" element={<TagsPage />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>

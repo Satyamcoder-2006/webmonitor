@@ -8,23 +8,37 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Plus, RefreshCw, Search, X } from "lucide-react";
-import { useQuery, useQueryClient, UseQueryOptions } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { useWebSocket } from "@/hooks/useWebSocket.ts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import type { WebsiteWithStatus } from "@/lib/types";
+import { useNavigate } from "react-router-dom";
+import { useWebSocket } from "@/hooks/useWebSocket";
+import type { Tag } from "@shared/schema";
 
 export default function Dashboard() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [lastUpdatedTime, setLastUpdatedTime] = useState(new Date().toLocaleTimeString());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { lastMessage } = useWebSocket();
 
+  // Fetch available tags directly from the API
+  const { data: availableTags, isLoading: isLoadingTags } = useQuery<Tag[]>({
+    queryKey: ["/api/tags"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/tags");
+      if (!response.ok) {
+        throw new Error("Failed to fetch tags");
+      }
+      return response.json();
+    }
+  });
+
   // Define queryOptions before useQuery
-  const queryOptions: UseQueryOptions<WebsiteWithStatus[], Error> = {
+  const queryOptions = {
     queryKey: ["/api/websites"],
     queryFn: async () => {
       const response = await fetch("/api/websites");
@@ -79,19 +93,6 @@ export default function Dashboard() {
     setLastUpdatedTime(new Date().toLocaleTimeString());
   };
 
-  // Extract available tags from websites once data is fetched
-  useEffect(() => {
-    if (websitesData && Array.isArray(websitesData)) {
-      const allTags = new Set<string>();
-      websitesData.forEach((website: WebsiteWithStatus) => {
-        if (website.customTags && typeof website.customTags === 'object' && !Array.isArray(website.customTags) && website.customTags !== null) {
-          Object.keys(website.customTags as Record<string, unknown>).forEach(tag => allTags.add(tag));
-        }
-      });
-      setAvailableTags(Array.from(allTags));
-    }
-  }, [websitesData]);
-
   // Filter websites based on search query and selected tags
   const filteredWebsites = websitesData?.filter(website => {
     const matchesSearch = website.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -102,13 +103,27 @@ export default function Dashboard() {
                             website.customTags && 
                             typeof website.customTags === 'object' &&
                             !Array.isArray(website.customTags) &&
-                            selectedTags.every(selectedTag => 
-                              Object.keys(website.customTags as Record<string, unknown>).includes(selectedTag)
+                            selectedTags.some(selectedTag => 
+                              Object.keys(website.customTags as Record<string, unknown>).some(websiteTagKey =>
+                                websiteTagKey.toLowerCase().trim() === selectedTag.toLowerCase().trim()
+                              )
                             )
                           );
 
     return matchesSearch && hasSelectedTags;
   }) || [];
+
+  // Debugging logs for filtering
+  useEffect(() => {
+    console.log('--- Dashboard Filtering Debug ---');
+    console.log('Current selectedTags:', selectedTags);
+    console.log('Total websites (from API):', websitesData?.length || 0);
+    console.log('Filtered websites count:', filteredWebsites.length);
+    if (websitesData) {
+      console.log('Website customTags examples:', websitesData.map(w => ({ name: w.name, customTags: w.customTags })));
+    }
+    console.log('---------------------------------');
+  }, [selectedTags, websitesData, filteredWebsites]);
 
   return (
     <div className="space-y-6">
@@ -133,8 +148,8 @@ export default function Dashboard() {
               <span>Refresh</span>
             </Button>
             <Button 
-              onClick={() => setIsAddModalOpen(true)}
-              className="bg-primary hover:bg-primary/90 text-white"
+              onClick={() => navigate('/websites/new')}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
             >
               <Plus className="h-4 w-4 mr-2" />
               <span>Add Website</span>
@@ -155,44 +170,72 @@ export default function Dashboard() {
           </div>
           
           <div className="flex-1">
-            <Select>
-              <SelectTrigger className="glass-button text-gray-900 dark:text-white">
-                <SelectValue placeholder="Filter by tags" className="text-gray-900 dark:text-white" />
+            <Select open={isTagDropdownOpen} onOpenChange={setIsTagDropdownOpen}>
+              <SelectTrigger className="glass-button text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600">
+                <SelectValue placeholder="Filter by tags">
+                  {selectedTags.length > 0 ? selectedTags.join(', ') : "Filter by tags"}
+                </SelectValue>
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" onSelect={() => setSelectedTags([])}>
-                  <div className="flex items-center w-full">
+              <SelectContent className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-lg rounded-lg">
+                <div className="p-1">
+                  <div 
+                    className="flex items-center w-full p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setSelectedTags([]);
+                      setIsTagDropdownOpen(false);
+                    }}
+                  >
                     <Checkbox
                       checked={selectedTags.length === 0}
-                      onCheckedChange={() => setSelectedTags([])}
+                      onCheckedChange={(checked) => {
+                        setSelectedTags([]);
+                        setIsTagDropdownOpen(false);
+                      }}
                       className="mr-2"
                     />
-                    All Websites
+                    <span className="text-gray-900 dark:text-white">All Websites</span>
                   </div>
-                </SelectItem>
-                {availableTags.map(tag => (
-                  <SelectItem 
-                    key={tag} 
-                    value={tag}
-                  >
-                    <div className="flex items-center w-full">
-                      <Checkbox 
-                        checked={selectedTags.includes(tag)}
-                        onCheckedChange={(checkedState) => {
-                          setSelectedTags(prev => {
-                            if (checkedState) {
-                              return [...prev, tag];
-                            } else {
-                              return prev.filter(t => t !== tag);
-                            }
-                          });
-                        }} 
-                        className="mr-2"
-                      />
-                      {tag}
+                  {isLoadingTags ? (
+                    <div className="p-2 text-sm text-gray-500 dark:text-gray-400">
+                      Loading tags...
                     </div>
-                  </SelectItem>
-                ))}
+                  ) : availableTags && availableTags.length > 0 ? (
+                    availableTags.map((tag) => (
+                      <div 
+                        key={tag.id}
+                        className="flex items-center w-full p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setSelectedTags(prev => {
+                            const newTags = prev.includes(tag.name)
+                              ? prev.filter(t => t !== tag.name)
+                              : [...prev, tag.name];
+                            return newTags;
+                          });
+                        }}
+                      >
+                        <Checkbox 
+                          checked={selectedTags.includes(tag.name)}
+                          onCheckedChange={(checked) => {
+                            setSelectedTags(prev => {
+                              const newTags = checked 
+                                ? [...prev, tag.name]
+                                : prev.filter(t => t !== tag.name);
+                              return newTags;
+                            });
+                          }} 
+                          className="mr-2"
+                        />
+                        <span className="text-gray-900 dark:text-white">{tag.name}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-2 text-sm text-gray-500 dark:text-gray-400">
+                      No tags available. Create tags from the Tags page.
+                    </div>
+                  )}
+                </div>
               </SelectContent>
             </Select>
           </div>

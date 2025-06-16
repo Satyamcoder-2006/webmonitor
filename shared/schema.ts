@@ -43,6 +43,11 @@ export const alerts = pgTable("alerts", {
   read: boolean("read").notNull().default(false),
 });
 
+export const tags = pgTable("tags", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+});
+
 // Types
 export type Website = typeof websites.$inferSelect;
 export type NewWebsite = typeof websites.$inferInsert;
@@ -51,10 +56,17 @@ export type NewMonitoringLog = typeof monitoringLogs.$inferInsert;
 export type Alert = typeof alerts.$inferSelect;
 export type NewAlert = typeof alerts.$inferInsert;
 
+export type Tag = typeof tags.$inferSelect;
+export type NewTag = typeof tags.$inferInsert;
+
 // Zod schemas
 export const insertWebsiteSchema = createInsertSchema(websites);
 export const selectWebsiteSchema = createSelectSchema(websites);
+export const updateWebsiteSchema = createSelectSchema(websites).partial(); // Make all fields optional for updates based on select schema
 export const insertMonitoringLogSchema = createInsertSchema(monitoringLogs);
 export const selectMonitoringLogSchema = createSelectSchema(monitoringLogs);
 export const insertAlertSchema = createInsertSchema(alerts);
 export const selectAlertSchema = createSelectSchema(alerts);
+
+export const insertTagSchema = createInsertSchema(tags);
+export const selectTagSchema = createSelectSchema(tags);

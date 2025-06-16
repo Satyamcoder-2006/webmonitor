@@ -5,7 +5,8 @@ import {
   PlusCircle, 
   ChartBar, 
   Cog,
-  Monitor
+  Monitor,
+  Tag
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -18,8 +19,9 @@ const Sidebar = ({ isExpanded, setIsExpanded }: SidebarProps) => {
 
   const navItems = [
     { path: '/', icon: ChartLine, label: 'Dashboard' },
-    { path: '/add', icon: PlusCircle, label: 'Add Website' },
+    { path: '/websites/new', icon: PlusCircle, label: 'Add Website' },
     { path: '/analytics', icon: ChartBar, label: 'Analytics' },
+    { path: '/tags', icon: Tag, label: 'Tags' },
     { path: '/settings', icon: Cog, label: 'Settings' },
   ];
 

@@ -361,6 +361,12 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
       return;
     }
 
+    // Skip monitoring if website is not active
+    if (!website.isActive) {
+      console.log(`[monitorWebsite] Website ${website.name} is paused, skipping monitoring`);
+      return;
+    }
+
     const result = await checkWebsite(website.url);
     const now = new Date();
 

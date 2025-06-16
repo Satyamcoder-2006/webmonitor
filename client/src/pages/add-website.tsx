@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
@@ -13,12 +13,31 @@ import { Badge } from "@/components/ui/badge";
 import { X } from "lucide-react";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { z } from "zod";
+import { Tag } from "@shared/schema";
+import { 
+  Select, 
+  SelectContent, 
+  SelectTrigger, 
+  SelectValue 
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function AddWebsite() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [currentTag, setCurrentTag] = useState('');
+  const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
+
+  const { data: availableTags, isLoading: isLoadingTags } = useQuery<Tag[]>({
+    queryKey: ["/api/tags"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/tags");
+      if (!response.ok) {
+        throw new Error("Failed to fetch tags");
+      }
+      return response.json();
+    },
+  });
 
   const formSchema = z.object({
     name: z.string().min(1, "Name is required"),
@@ -28,7 +47,7 @@ export default function AddWebsite() {
     ),
     email: z.string().email("Please enter a valid email"),
     checkInterval: z.number().min(1, "Check interval must be at least 1 minute").max(60, "Check interval cannot exceed 60 minutes"),
-    customTags: z.record(z.string()).optional(),
+    customTags: z.array(z.string()).optional(),
     isActive: z.boolean().default(true),
   });
 
@@ -39,14 +58,18 @@ export default function AddWebsite() {
       url: "",
       email: "",
       checkInterval: 5,
-      customTags: {},
+      customTags: [],
       isActive: true,
     },
   });
 
   const addWebsiteMutation = useMutation({
     mutationFn: async (data: z.infer<typeof formSchema>) => {
-      const response = await apiRequest("POST", "/api/websites", data);
+      const dataForSubmission = {
+        ...data,
+        customTags: data.customTags ? data.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {}) : {},
+      };
+      const response = await apiRequest("POST", "/api/websites", dataForSubmission);
       if (!response.ok) {
         throw new Error('Failed to add website');
       }
@@ -72,6 +95,11 @@ export default function AddWebsite() {
   const onSubmit = (data: z.infer<typeof formSchema>) => {
     addWebsiteMutation.mutate(data);
   };
+
+  console.log("AddWebsite component rendering...");
+  console.log("Available Tags:", availableTags);
+  console.log("Is Loading Tags:", isLoadingTags);
+  console.log("Form values:", form.getValues());
 
   return (
     <div className="space-y-6">
@@ -162,62 +190,94 @@ export default function AddWebsite() {
                 name="customTags"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-gray-900 dark:text-white">Custom Tags</FormLabel>
+                    <FormLabel className="text-gray-900 dark:text-white">Tags</FormLabel>
                     <FormControl>
-                      <div className="space-y-2">
-                        <div className="flex gap-2">
-                          <Input
-                            placeholder="Add a tag"
-                            value={currentTag}
-                            onChange={(e) => setCurrentTag(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
+                      <Select open={isTagDropdownOpen} onOpenChange={setIsTagDropdownOpen}>
+                        <SelectTrigger className="glass-button text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600">
+                          <SelectValue placeholder="Select tags">
+                            {Array.isArray(field.value) && field.value.length > 0 
+                              ? field.value.join(', ') 
+                              : "Select tags"
+                            }
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-lg rounded-lg">
+                          <div className="p-1">
+                            <div 
+                              className="flex items-center w-full p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                              onClick={(e) => {
                                 e.preventDefault();
-                                if (currentTag.trim()) {
-                                  const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
-                                  field.onChange(newTags);
-                                  setCurrentTag('');
-                                }
-                              }
-                            }}
-                            className="glass-button text-gray-900 dark:text-white"
-                          />
-                          <Button
-                            type="button"
-                            variant={undefined}
-                            onClick={() => {
-                              if (currentTag.trim()) {
-                                const newTags = { ...field.value, [currentTag.trim()]: currentTag.trim() };
-                                field.onChange(newTags);
-                                setCurrentTag('');
-                              }
-                            }}
-                            className="bg-blue-600 hover:bg-blue-700 text-white"
-                          >
-                            Add
-                          </Button>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {Object.entries(field.value || {}).map(([key, value]) => (
-                            <Badge
-                              key={key}
-                              variant="secondary"
-                              className="flex items-center gap-1 glass-button px-3 py-1"
+                                field.onChange([]);
+                                setIsTagDropdownOpen(false);
+                              }}
                             >
-                              {value}
-                              <X 
-                                className="ml-1 h-3 w-3 cursor-pointer text-gray-600 dark:text-gray-400" 
-                                onClick={() => {
-                                  const newTags = { ...field.value };
-                                  delete newTags[key];
-                                  field.onChange(newTags);
+                              <Checkbox
+                                checked={Array.isArray(field.value) && field.value.length === 0}
+                                onCheckedChange={(checked) => {
+                                  field.onChange([]);
+                                  setIsTagDropdownOpen(false);
                                 }}
+                                className="mr-2"
                               />
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
+                              <span className="text-gray-900 dark:text-white">No Tags</span>
+                            </div>
+                            {isLoadingTags ? (
+                              <div className="p-2 text-sm text-gray-500 dark:text-gray-400">
+                                Loading tags...
+                              </div>
+                            ) : availableTags && Array.isArray(availableTags) && availableTags.length > 0 ? (
+                              availableTags.map((tag) => (
+                                <div 
+                                  key={tag.id}
+                                  className="flex items-center w-full p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    const currentTags = Array.isArray(field.value) ? field.value : [];
+                                    const newTags = currentTags.includes(tag.name)
+                                      ? currentTags.filter(t => t !== tag.name)
+                                      : [...currentTags, tag.name];
+                                    field.onChange(newTags);
+                                  }}
+                                >
+                                  <Checkbox
+                                    checked={Array.isArray(field.value) && field.value.includes(tag.name)}
+                                    onCheckedChange={(checked) => {
+                                      const currentTags = Array.isArray(field.value) ? field.value : [];
+                                      const newTags = checked 
+                                        ? [...currentTags, tag.name]
+                                        : currentTags.filter(t => t !== tag.name);
+                                      field.onChange(newTags);
+                                    }}
+                                    className="mr-2"
+                                  />
+                                  <span className="text-gray-900 dark:text-white">{tag.name}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="p-2 text-sm text-gray-500 dark:text-gray-400">
+                                No tags available. Create tags from the Tags page.
+                              </div>
+                            )}
+                          </div>
+                        </SelectContent>
+                      </Select>
                     </FormControl>
+                    {Array.isArray(field.value) && field.value.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(Array.isArray(field.value) ? field.value : []).map((tag: string) => (
+                          <Badge key={tag} variant="secondary" className="glass-button px-3 py-1">
+                            {tag}
+                            <X 
+                              className="ml-2 h-3 w-3 cursor-pointer" 
+                              onClick={() => field.onChange((Array.isArray(field.value) ? field.value : []).filter((t: string) => t !== tag))}
+                            />
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <FormDescription className="text-gray-600 dark:text-gray-400">
+                      Assign existing tags to this website.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

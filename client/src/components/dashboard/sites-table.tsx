@@ -161,7 +161,11 @@ export default function SitesTable({ searchQuery, selectedTags, websites, isLoad
     },
   });
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, isActive: boolean) => {
+    if (!isActive) {
+      return <Badge className="bg-yellow-500/10 text-yellow-600 border border-yellow-500/20 dark:bg-yellow-400/10 dark:text-yellow-400 dark:border-yellow-400/20">Paused</Badge>;
+    }
+    
     switch (status) {
       case 'up':
         return <Badge className="bg-green-500/10 text-green-500 border border-green-500/20 dark:bg-green-400/10 dark:text-green-400 dark:border-green-400/20">Online</Badge>;
@@ -172,12 +176,14 @@ export default function SitesTable({ searchQuery, selectedTags, websites, isLoad
     }
   };
 
-  const formatResponseTime = (responseTime: number | null) => {
+  const formatResponseTime = (responseTime: number | null, isActive: boolean) => {
+    if (!isActive) return '-';
     if (responseTime === null) return 'N/A';
     return `${responseTime}ms`;
   };
 
-  const formatLastCheck = (lastCheck: string | null) => {
+  const formatLastCheck = (lastCheck: string | null, isActive: boolean) => {
+    if (!isActive) return '-';
     if (!lastCheck) return 'Never';
     const date = new Date(lastCheck);
     const now = new Date();
@@ -229,6 +235,7 @@ export default function SitesTable({ searchQuery, selectedTags, websites, isLoad
               <TableHead>Response Time</TableHead>
               <TableHead>Last Check</TableHead>
               <TableHead>SSL Status</TableHead>
+              <TableHead>SSL Expiry</TableHead>
               <TableHead>Tags</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -246,15 +253,36 @@ export default function SitesTable({ searchQuery, selectedTags, websites, isLoad
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell>{getStatusBadge(website.status)}</TableCell>
-                  <TableCell>{formatResponseTime(website.responseTime)}</TableCell>
-                  <TableCell>{formatLastCheck(website.lastCheck)}</TableCell>
+                  <TableCell>{getStatusBadge(website.status, website.isActive)}</TableCell>
+                  <TableCell>{formatResponseTime(website.responseTime, website.isActive)}</TableCell>
+                  <TableCell>{formatLastCheck(website.lastCheck, website.isActive)}</TableCell>
                   <TableCell>
                     {website.url.startsWith('https://') ? (
                       website.sslValid ? (
-                        <Badge variant="success" title={`SSL valid until ${formatSSLExpiryDate(website.sslExpiryDate!)}`}>Valid</Badge>
+                        <Badge className="bg-green-500/10 text-green-500 border border-green-500/20 dark:bg-green-400/10 dark:text-green-400 dark:border-green-400/20">Valid</Badge>
                       ) : (
-                        <Badge variant="danger" title={website.sslValid === false && website.sslDaysLeft !== null ? `SSL expired: ${website.sslDaysLeft} days ago` : 'SSL Invalid'}>Invalid</Badge>
+                        <Badge className="bg-red-500/10 text-red-500 border border-red-500/20 dark:bg-red-400/10 dark:text-red-400 dark:border-red-400/20">Invalid</Badge>
+                      )
+                    ) : (
+                      <Badge className="bg-gray-100/10 text-gray-800 border border-gray-200/20 dark:bg-gray-700/10 dark:text-gray-400 dark:border-gray-600/20">N/A</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {website.url.startsWith('https://') ? (
+                      website.sslDaysLeft !== null ? (
+                        <Badge 
+                          className={`${
+                            website.sslDaysLeft <= 30 
+                              ? 'bg-red-500/10 text-red-500 border-red-500/20 dark:bg-red-400/10 dark:text-red-400 dark:border-red-400/20'
+                              : website.sslDaysLeft <= 90
+                              ? 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20 dark:bg-yellow-400/10 dark:text-yellow-400 dark:border-yellow-400/20'
+                              : 'bg-green-500/10 text-green-500 border-green-500/20 dark:bg-green-400/10 dark:text-green-400 dark:border-green-400/20'
+                          } border`}
+                        >
+                          {website.sslDaysLeft} days
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-gray-100/10 text-gray-800 border border-gray-200/20 dark:bg-gray-700/10 dark:text-gray-400 dark:border-gray-600/20">Unknown</Badge>
                       )
                     ) : (
                       <Badge className="bg-gray-100/10 text-gray-800 border border-gray-200/20 dark:bg-gray-700/10 dark:text-gray-400 dark:border-gray-600/20">N/A</Badge>

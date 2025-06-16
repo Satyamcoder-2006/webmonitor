@@ -1,4 +1,4 @@
-import { websites, monitoringLogs, alerts, type Website, type NewWebsite, type MonitoringLog, type NewMonitoringLog, type Alert, type NewAlert } from "@shared/schema";
+import { websites, monitoringLogs, alerts, type Website, type NewWebsite, type MonitoringLog, type NewMonitoringLog, type Alert, type NewAlert, tags, type Tag, type NewTag } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, gte } from "drizzle-orm";
 
@@ -31,6 +31,13 @@ export interface IStorage {
 
   // Clear all websites and their data
   clearAllWebsitesAndData(): Promise<void>;
+
+  // Tag operations
+  createTag(tag: NewTag): Promise<Tag>;
+  getTags(): Promise<Tag[]>;
+  getTag(id: number): Promise<Tag | undefined>;
+  updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined>;
+  deleteTag(id: number): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -128,6 +135,8 @@ export class DatabaseStorage implements IStorage {
       responseTime: monitoringLogs.responseTime,
       errorMessage: monitoringLogs.errorMessage,
       checkedAt: monitoringLogs.checkedAt,
+      changeType: monitoringLogs.changeType,
+      previousStatus: monitoringLogs.previousStatus,
       website: websites,
     })
     .from(monitoringLogs)
@@ -167,10 +176,10 @@ export class DatabaseStorage implements IStorage {
       .map(s => s.responseTime!);
 
     const averageResponseTime = validResponseTimes.length > 0 
-      ? validResponseTimes.reduce((a, b) => a + b, 0) / validResponseTimes.length 
+      ? Math.round(validResponseTimes.reduce((a, b) => a + b, 0) / validResponseTimes.length) 
       : 0;
 
-    const uptime = totalSites > 0 ? (sitesUp / totalSites) * 100 : 0;
+    const uptime = totalSites > 0 ? Math.round((sitesUp / totalSites) * 100) : 0;
 
     return {
       totalSites,
@@ -191,6 +200,30 @@ export class DatabaseStorage implements IStorage {
       await tx.delete(alerts);
       await tx.delete(websites);
     });
+  }
+
+  async createTag(tag: NewTag): Promise<Tag> {
+    const [result] = await db.insert(tags).values(tag).returning();
+    return result;
+  }
+
+  async getTags(): Promise<Tag[]> {
+    return await db.select().from(tags).orderBy(tags.name);
+  }
+
+  async getTag(id: number): Promise<Tag | undefined> {
+    const [tag] = await db.select().from(tags).where(eq(tags.id, id));
+    return tag;
+  }
+
+  async updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined> {
+    const [updated] = await db.update(tags).set(updates).where(eq(tags.id, id)).returning();
+    return updated;
+  }
+
+  async deleteTag(id: number): Promise<boolean> {
+    const result = await db.delete(tags).where(eq(tags.id, id)).returning({ id: tags.id });
+    return result.length > 0;
   }
 }
 

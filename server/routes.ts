@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertWebsiteSchema, selectWebsiteSchema } from "@shared/schema";
+import { insertWebsiteSchema, selectWebsiteSchema, updateWebsiteSchema, insertTagSchema, selectTagSchema } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { WebSocketServer } from 'ws';
@@ -124,7 +124,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
-      const updates = selectWebsiteSchema.parse(req.body);
+      const updates = updateWebsiteSchema.parse(req.body);
       const website = await storage.updateWebsite(id, updates);
       
       if (!website) {
@@ -507,6 +507,100 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error restarting monitoring:', error);
       res.status(500).json({ message: "Failed to restart monitoring" });
+    }
+  });
+
+  // Get all tags
+  app.get("/api/tags", async (req, res) => {
+    try {
+      const tags = await storage.getTags();
+      res.json(tags);
+    } catch (error) {
+      console.error('Error fetching tags:', error);
+      res.status(500).json({ message: "Failed to fetch tags" });
+    }
+  });
+
+  // Get a single tag by ID
+  app.get("/api/tags/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid tag ID" });
+      }
+
+      const tag = await storage.getTag(id);
+      if (!tag) {
+        return res.status(404).json({ message: "Tag not found" });
+      }
+      res.json(tag);
+    } catch (error) {
+      console.error('Error fetching tag by ID:', error);
+      res.status(500).json({ message: "Failed to fetch tag" });
+    }
+  });
+
+  // Create new tag
+  app.post("/api/tags", async (req, res) => {
+    try {
+      const validatedData = insertTagSchema.parse(req.body);
+      const tag = await storage.createTag(validatedData);
+      res.status(201).json(tag);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const validationError = fromZodError(error);
+        res.status(400).json({ message: validationError.message });
+      } else {
+        console.error('Error creating tag:', error);
+        res.status(500).json({ message: "Failed to create tag" });
+      }
+    }
+  });
+
+  // Update tag
+  app.patch("/api/tags/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid tag ID" });
+      }
+
+      const updates = selectTagSchema.partial().parse(req.body);
+      const tag = await storage.updateTag(id, updates);
+      
+      if (!tag) {
+        return res.status(404).json({ message: "Tag not found" });
+      }
+      
+      res.json(tag);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const validationError = fromZodError(error);
+        res.status(400).json({ message: validationError.message });
+      } else {
+        console.error('Error updating tag:', error);
+        res.status(500).json({ message: "Failed to update tag" });
+      }
+    }
+  });
+
+  // Delete tag
+  app.delete("/api/tags/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid tag ID" });
+      }
+
+      const deleted = await storage.deleteTag(id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Tag not found" });
+      }
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error('Error deleting tag:', error);
+      res.status(500).json({ message: "Failed to delete tag" });
     }
   });
 
