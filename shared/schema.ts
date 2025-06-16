@@ -60,9 +60,13 @@ export type Tag = typeof tags.$inferSelect;
 export type NewTag = typeof tags.$inferInsert;
 
 // Zod schemas
-export const insertWebsiteSchema = createInsertSchema(websites);
+export const insertWebsiteSchema = createInsertSchema(websites).extend({
+  customTags: z.array(z.string()).optional(),
+});
 export const selectWebsiteSchema = createSelectSchema(websites);
-export const updateWebsiteSchema = createSelectSchema(websites).partial(); // Make all fields optional for updates based on select schema
+export const updateWebsiteSchema = createSelectSchema(websites).partial().extend({
+  customTags: z.array(z.string()).optional(),
+});
 export const insertMonitoringLogSchema = createInsertSchema(monitoringLogs);
 export const selectMonitoringLogSchema = createSelectSchema(monitoringLogs);
 export const insertAlertSchema = createInsertSchema(alerts);

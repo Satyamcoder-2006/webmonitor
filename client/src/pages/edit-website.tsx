@@ -20,12 +20,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { z } from "zod";
 import { Checkbox } from "@/components/ui/checkbox";
 
+// Define a type for website data as received from the API, where customTags is an object
+interface FetchedWebsiteData extends Omit<Website, 'customTags'> {
+  customTags: Record<string, string> | null | undefined;
+}
+
+// Define a specific form schema for client-side validation
+const editWebsiteFormSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  url: z.string().regex(
+    /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/,
+    "Please enter a valid URL (e.g., https://example.com, example.net)"
+  ),
+  email: z.string().email("Please enter a valid email"),
+  checkInterval: z.number().min(1, "Check interval must be at least 1 minute").max(60, "Check interval cannot exceed 60 minutes"),
+  customTags: z.array(z.string()).optional(),
+  isActive: z.boolean().default(true),
+});
+
 export default function EditWebsite() {
   const params = useParams();
   const websiteId = parseInt(params.id as string);
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
 
   // Fetch available tags
   const { data: availableTags, isLoading: isLoadingTags } = useQuery<Tag[]>({
@@ -39,24 +58,21 @@ export default function EditWebsite() {
     }
   });
 
-  const { data: website, isLoading } = useQuery({
+  const { data: website, isLoading } = useQuery<FetchedWebsiteData>({
     queryKey: [`/api/websites/${websiteId}`],
     queryFn: async () => {
       const response = await apiRequest("GET", `/api/websites/${websiteId}`);
       if (!response.ok) {
         throw new Error('Failed to fetch website');
       }
-      return response.json() as Promise<Website>;
+      const data = await response.json();
+      console.log("Website data fetched:", data);
+      return data as FetchedWebsiteData;
     },
     enabled: !isNaN(websiteId),
   });
 
-  const formSchema = updateWebsiteSchema.extend({
-    customTags: z.record(z.string()).optional().transform(val => Object.keys(val || {})),
-  }).transform(data => ({
-    ...data,
-    customTags: data.customTags ? data.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {}) : {},
-  }));
+  const formSchema = editWebsiteFormSchema;
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -65,7 +81,7 @@ export default function EditWebsite() {
       url: "",
       email: "",
       checkInterval: 5,
-      customTags: {},
+      customTags: [],
       isActive: false,
     },
   });
@@ -73,20 +89,30 @@ export default function EditWebsite() {
   // Update form values when website data and available tags are loaded
   useEffect(() => {
     if (website && availableTags) {
+      // Ensure website.customTags (from DB) is treated as an object and then converted to an array of keys for the form
+      const websiteCustomTags = website.customTags || {};
+      const tagsForForm: string[] = Object.keys(websiteCustomTags);
+
       form.reset({
         name: website.name,
         url: website.url,
         email: website.email,
         checkInterval: website.checkInterval,
-        customTags: Object.keys(website.customTags || {}),
+        customTags: tagsForForm,
         isActive: website.isActive,
       });
     }
   }, [website, availableTags, form]);
 
+  console.log("Form customTags on render:", form.getValues().customTags);
+
   const updateWebsiteMutation = useMutation({
     mutationFn: async (data: z.infer<typeof formSchema>) => {
-      const response = await apiRequest("PATCH", `/api/websites/${websiteId}`, data);
+      const dataForSubmission = {
+        ...data,
+        customTags: data.customTags ? data.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {}) : {},
+      };
+      const response = await apiRequest("PATCH", `/api/websites/${websiteId}`, dataForSubmission);
       if (!response.ok) {
         throw new Error('Failed to update website');
       }
@@ -111,6 +137,8 @@ export default function EditWebsite() {
   });
 
   const onSubmit = (data: z.infer<typeof formSchema>) => {
+    console.log("Form submitted data:", data);
+    console.log("Form errors:", form.formState.errors);
     updateWebsiteMutation.mutate(data);
   };
 
@@ -253,52 +281,92 @@ export default function EditWebsite() {
               name="customTags"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Tags</FormLabel>
+                  <FormLabel className="text-gray-900 dark:text-white">Tags</FormLabel>
                   <FormControl>
-                    <Select
-                      value={Array.isArray(field.value) ? field.value.join(',') : ''}
-                      onValueChange={(newValue) => {
-                        const selectedValues = newValue.split(',').filter(Boolean);
-                        field.onChange(selectedValues);
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select tags" />
+                    <Select open={isTagDropdownOpen} onOpenChange={setIsTagDropdownOpen}>
+                      <SelectTrigger className="glass-button text-gray-900 dark:text-white border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600">
+                        <SelectValue placeholder="Select tags">
+                          {Array.isArray(field.value) && field.value.length > 0 
+                            ? field.value.join(', ') 
+                            : "Select tags"
+                          }
+                        </SelectValue>
                       </SelectTrigger>
-                      <SelectContent>
-                        {isLoadingTags ? (
-                          <SelectItem value="loading" disabled>
-                            Loading tags...
-                          </SelectItem>
-                        ) : availableTags && Array.isArray(availableTags) && availableTags.length > 0 ? (
-                          availableTags.map((tag) => (
-                            <SelectItem key={tag.id} value={tag.name}>
-                              <div className="flex items-center w-full">
+                      <SelectContent className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-lg rounded-lg">
+                        <div className="p-1">
+                          <div 
+                            className="flex items-center w-full p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              field.onChange([]);
+                              setIsTagDropdownOpen(false);
+                            }}
+                          >
+                            <Checkbox
+                              checked={Array.isArray(field.value) && field.value.length === 0}
+                              onCheckedChange={(checked) => {
+                                field.onChange([]);
+                                setIsTagDropdownOpen(false);
+                              }}
+                              className="mr-2"
+                            />
+                            <span className="text-gray-900 dark:text-white">No Tags</span>
+                          </div>
+                          {isLoadingTags ? (
+                            <div className="p-2 text-sm text-gray-500 dark:text-gray-400">
+                              Loading tags...
+                            </div>
+                          ) : availableTags && Array.isArray(availableTags) && availableTags.length > 0 ? (
+                            availableTags.map((tag) => (
+                              <div 
+                                key={tag.id}
+                                className="flex items-center w-full p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  const currentTags = Array.isArray(field.value) ? field.value : [];
+                                  const newTags = currentTags.includes(tag.name)
+                                    ? currentTags.filter(t => t !== tag.name)
+                                    : [...currentTags, tag.name];
+                                  field.onChange(newTags);
+                                }}
+                              >
                                 <Checkbox
                                   checked={Array.isArray(field.value) && field.value.includes(tag.name)}
-                                  onCheckedChange={(checkedState) => {
+                                  onCheckedChange={(checked) => {
                                     const currentTags = Array.isArray(field.value) ? field.value : [];
-                                    if (checkedState) {
-                                      field.onChange([...currentTags, tag.name]);
-                                    } else {
-                                      field.onChange(currentTags.filter(t => t !== tag.name));
-                                    }
+                                    const newTags = checked 
+                                      ? [...currentTags, tag.name]
+                                      : currentTags.filter(t => t !== tag.name);
+                                    field.onChange(newTags);
                                   }}
                                   className="mr-2"
                                 />
-                                {tag.name}
+                                <span className="text-gray-900 dark:text-white">{tag.name}</span>
                               </div>
-                            </SelectItem>
-                          ))
-                        ) : (
-                          <SelectItem value="no-tags" disabled>
-                            No tags available. Create tags from the Tags page.
-                          </SelectItem>
-                        )}
+                            ))
+                          ) : (
+                            <div className="p-2 text-sm text-gray-500 dark:text-gray-400">
+                              No tags available. Create tags from the Tags page.
+                            </div>
+                          )}
+                        </div>
                       </SelectContent>
                     </Select>
                   </FormControl>
-                  <FormDescription>
+                  {Array.isArray(field.value) && field.value.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(Array.isArray(field.value) ? field.value : []).map((tag: string) => (
+                        <Badge key={tag} variant="secondary" className="glass-button px-3 py-1">
+                          {tag}
+                          <X 
+                            className="ml-2 h-3 w-3 cursor-pointer" 
+                            onClick={() => field.onChange((Array.isArray(field.value) ? field.value : []).filter((t: string) => t !== tag))}
+                          />
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  <FormDescription className="text-gray-600 dark:text-gray-400">
                     Assign existing tags to this website.
                   </FormDescription>
                   <FormMessage />

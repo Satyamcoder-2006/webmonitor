@@ -1,12 +1,13 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertWebsiteSchema, selectWebsiteSchema, updateWebsiteSchema, insertTagSchema, selectTagSchema } from "@shared/schema";
+import { insertWebsiteSchema, selectWebsiteSchema, updateWebsiteSchema, insertTagSchema, selectTagSchema, Website, NewWebsite } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { WebSocketServer } from 'ws';
 import { setBroadcastFunction } from "./monitoring";
 import WebSocket from 'ws';
+import { and, eq, gte, desc, sql } from "drizzle-orm";
 
 let wss: WebSocketServer;
 
@@ -98,7 +99,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/websites", async (req, res) => {
     try {
       const validatedData = insertWebsiteSchema.parse(req.body);
-      const website = await storage.createWebsite(validatedData);
+
+      const dataForStorage: NewWebsite = { ...validatedData };
+
+      if (Array.isArray(validatedData.customTags)) {
+        dataForStorage.customTags = validatedData.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
+      } else {
+        dataForStorage.customTags = {}; // Ensure it's an empty object if no tags or not an array
+      }
+
+      const website = await storage.createWebsite(dataForStorage);
       
       // Schedule monitoring for the new website
       const { updateWebsiteMonitoring } = await import("./monitoring");
@@ -125,7 +135,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const updates = updateWebsiteSchema.parse(req.body);
-      const website = await storage.updateWebsite(id, updates);
+
+      const dataForStorage: Partial<Website> = { ...updates };
+
+      if (Array.isArray(updates.customTags)) {
+        dataForStorage.customTags = updates.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
+      }
+
+      const website = await storage.updateWebsite(id, dataForStorage);
       
       if (!website) {
         return res.status(404).json({ message: "Website not found" });
@@ -301,53 +318,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Analytics endpoint
   app.get("/api/analytics", async (req, res) => {
     try {
-      const [websites, allLogs] = await Promise.all([
+      const timeRange = req.query.timeRange as string || "24h"; // Default to 24 hours
+      let startDate: Date | undefined;
+
+      switch (timeRange) {
+        case "24h":
+          startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+          break;
+        case "7d":
+          startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case "30d":
+          startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+          break;
+        case "90d":
+          startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+          break;
+        default:
+          startDate = undefined; // No filter
+      }
+
+      const [websites, filteredLogs] = await Promise.all([
         storage.getWebsites(),
-        storage.getMonitoringLogs(undefined, 1000) // Get more logs for analytics
+        storage.getMonitoringLogs(undefined, 10000, startDate) // Get logs filtered by timeRange
       ]);
 
-      // Calculate metrics
-      const totalChecks = allLogs.length;
-      const validResponseTimes = allLogs.filter(log => log.responseTime && log.responseTime > 0);
+      // Calculate metrics from filteredLogs
+      const totalChecks = filteredLogs.length;
+      const validResponseTimes = filteredLogs.filter(log => log.responseTime && log.responseTime > 0);
       const averageResponseTime = validResponseTimes.length > 0 
         ? Math.round(validResponseTimes.reduce((sum, log) => sum + log.responseTime!, 0) / validResponseTimes.length)
         : 0;
 
-      // Calculate uptime percentage (last 24 hours)
-      const last24Hours = new Date();
-      last24Hours.setHours(last24Hours.getHours() - 24);
-      const recent24HLogs = allLogs.filter(log => new Date(log.checkedAt) >= last24Hours);
-      const upChecks = recent24HLogs.filter(log => log.status === 'up').length;
-      const uptimePercentage = recent24HLogs.length > 0 
-        ? Math.round((upChecks / recent24HLogs.length) * 100)
+      // Calculate uptime percentage and downtime events from filteredLogs
+      const upChecks = filteredLogs.filter(log => log.status === 'up').length;
+      const downtimeEvents = filteredLogs.filter(log => log.status === 'down').length;
+      const uptimePercentage = filteredLogs.length > 0 
+        ? Math.round((upChecks / filteredLogs.length) * 100)
         : 0;
 
-      // Count downtime events
-      const downtimeEvents = recent24HLogs.filter(log => log.status === 'down').length;
-
-      // Response time data by hour
-      const hourlyData = new Map();
-      validResponseTimes.forEach(log => {
-        const hour = new Date(log.checkedAt).getHours();
-        const hourKey = `${hour.toString().padStart(2, '0')}:00`;
-        if (!hourlyData.has(hourKey)) {
-          hourlyData.set(hourKey, { total: 0, count: 0 });
+      // Response time data by hour (or day for longer ranges)
+      const groupedData = new Map();
+      const formatKey = (date: Date) => {
+        if (timeRange === "24h") {
+          return `${date.getHours().toString().padStart(2, '0')}:00`;
+        } else {
+          return date.toLocaleDateString(); // Group by day for longer ranges
         }
-        const data = hourlyData.get(hourKey);
+      };
+
+      validResponseTimes.forEach(log => {
+        const key = formatKey(new Date(log.checkedAt));
+        if (!groupedData.has(key)) {
+          groupedData.set(key, { total: 0, count: 0 });
+        }
+        const data = groupedData.get(key);
         data.total += log.responseTime!;
         data.count += 1;
       });
 
-      const responseTimeData = Array.from(hourlyData.entries())
-        .map(([hour, data]) => ({
-          hour,
+      const responseTimeData = Array.from(groupedData.entries())
+        .map(([key, data]) => ({
+          hour: key,
           averageResponseTime: Math.round(data.total / data.count),
           checks: data.count
         }))
-        .sort((a, b) => a.hour.localeCompare(b.hour));
+        .sort((a, b) => a.hour.localeCompare(b.hour)); // Sort by time/date
 
       // Status distribution
-      const statusCounts = allLogs.reduce((acc, log) => {
+      const statusCounts = filteredLogs.reduce((acc, log) => {
         acc[log.status] = (acc[log.status] || 0) + 1;
         return acc;
       }, {} as Record<string, number>);
@@ -355,13 +394,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const statusDistribution = Object.entries(statusCounts).map(([status, count]) => ({
         status,
         count,
-        percentage: Math.round((count / totalChecks) * 100)
+        percentage: totalChecks > 0 ? Math.round((count / totalChecks) * 100) : 0
       }));
 
       // Website stats
       const websiteStats = await Promise.all(
         websites.map(async (website) => {
-          const websiteLogs = allLogs.filter(log => log.websiteId === website.id);
+          const websiteLogs = filteredLogs.filter(log => log.websiteId === website.id);
           const websiteUpChecks = websiteLogs.filter(log => log.status === 'up').length;
           const websiteUptime = websiteLogs.length > 0 
             ? Math.round((websiteUpChecks / websiteLogs.length) * 100)

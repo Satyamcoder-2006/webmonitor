@@ -13,7 +13,7 @@ export interface IStorage {
 
   // Monitoring log operations
   createMonitoringLog(log: NewMonitoringLog): Promise<MonitoringLog>;
-  getMonitoringLogs(websiteId?: number, limit?: number): Promise<MonitoringLog[]>;
+  getMonitoringLogs(websiteId?: number, limit?: number, startDate?: Date): Promise<MonitoringLog[]>;
   getLatestLogForWebsite(websiteId: number): Promise<MonitoringLog | undefined>;
   getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website | null })[]>;
 
@@ -105,14 +105,17 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getMonitoringLogs(websiteId?: number, limit = 50): Promise<MonitoringLog[]> {
+  async getMonitoringLogs(websiteId?: number, limit = 50, startDate?: Date): Promise<MonitoringLog[]> {
+    const conditions = [];
     if (websiteId) {
-      return await db.select().from(monitoringLogs)
-        .where(eq(monitoringLogs.websiteId, websiteId))
-        .orderBy(desc(monitoringLogs.checkedAt))
-        .limit(limit);
+      conditions.push(eq(monitoringLogs.websiteId, websiteId));
     }
+    if (startDate) {
+      conditions.push(gte(monitoringLogs.checkedAt, startDate));
+    }
+
     return await db.select().from(monitoringLogs)
+      .where(and(...conditions))
       .orderBy(desc(monitoringLogs.checkedAt))
       .limit(limit);
   }
