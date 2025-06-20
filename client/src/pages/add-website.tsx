@@ -67,7 +67,6 @@ export default function AddWebsite() {
     mutationFn: async (data: z.infer<typeof formSchema>) => {
       const dataForSubmission = {
         ...data,
-        customTags: data.customTags ? data.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {}) : {},
       };
       const response = await apiRequest("POST", "/api/websites", dataForSubmission);
       if (!response.ok) {
@@ -270,9 +269,9 @@ export default function AddWebsite() {
                             <X 
                               className="ml-2 h-3 w-3 cursor-pointer" 
                               onClick={() => field.onChange((Array.isArray(field.value) ? field.value : []).filter((t: string) => t !== tag))}
-                            />
-                          </Badge>
-                        ))}
+                              />
+                            </Badge>
+                          ))}
                       </div>
                     )}
                     <FormDescription className="text-gray-600 dark:text-gray-400">

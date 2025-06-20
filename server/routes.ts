@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws';
 import { setBroadcastFunction } from "./monitoring";
 import WebSocket from 'ws';
 import { and, eq, gte, desc, sql } from "drizzle-orm";
+import { monitoringBuffer } from "./monitoring";
 
 let wss: WebSocketServer;
 
@@ -205,6 +206,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get hourly statistics
+  app.get("/api/stats/hourly", async (req, res) => {
+    try {
+      const websiteId = req.query.websiteId ? parseInt(req.query.websiteId as string) : undefined;
+      const hours = req.query.hours ? parseInt(req.query.hours as string) : 24;
+      
+      if (!websiteId) {
+        return res.status(400).json({ message: "Website ID is required" });
+      }
+      
+      const stats = await storage.getHourlyStats(websiteId, hours);
+      res.json(stats);
+    } catch (error) {
+      console.error('Error fetching hourly stats:', error);
+      res.status(500).json({ message: "Failed to fetch hourly stats" });
+    }
+  });
+
+  // Get daily statistics
+  app.get("/api/stats/daily", async (req, res) => {
+    try {
+      const websiteId = req.query.websiteId ? parseInt(req.query.websiteId as string) : undefined;
+      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+      
+      if (!websiteId) {
+        return res.status(400).json({ message: "Website ID is required" });
+      }
+      
+      const stats = await storage.getDailyStats(websiteId, days);
+      res.json(stats);
+    } catch (error) {
+      console.error('Error fetching daily stats:', error);
+      res.status(500).json({ message: "Failed to fetch daily stats" });
+    }
+  });
+
   // Get recent activity
   app.get("/api/activity", async (req, res) => {
     try {
@@ -234,8 +271,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get dashboard stats
   app.get("/api/stats", async (req, res) => {
     try {
-      const stats = await storage.getWebsiteStats();
-      res.json(stats);
+      // Get all websites
+      const websites = await storage.getWebsites();
+
+      // Get latest DB log for each website
+      const dbLatestLogs = await Promise.all(
+        websites.map(async (website) => ({
+          websiteId: website.id,
+          log: await storage.getLatestLogForWebsite(website.id)
+        }))
+      );
+
+      // Build a map of latest DB logs
+      const latestStatus: Record<number, any> = {};
+      dbLatestLogs.forEach(({ websiteId, log }) => {
+        if (log) latestStatus[websiteId] = log;
+      });
+
+      // Update with buffer logs if newer
+      for (const log of monitoringBuffer) {
+        const dbLog = latestStatus[log.websiteId];
+        const dbCheckedAt = dbLog && dbLog.checkedAt ? new Date(dbLog.checkedAt) : undefined;
+        const bufferCheckedAt = log.checkedAt ? new Date(log.checkedAt) : undefined;
+        if (
+          !dbLog ||
+          (bufferCheckedAt && (!dbCheckedAt || bufferCheckedAt > dbCheckedAt))
+        ) {
+          latestStatus[log.websiteId] = log;
+        }
+      }
+
+      // Calculate stats
+      let sitesUp = 0, sitesDown = 0, totalSites = websites.length, totalResponseTime = 0, upCount = 0;
+      for (const website of websites) {
+        const log = latestStatus[website.id];
+        if (log) {
+          if (log.status === "up") sitesUp++;
+          if (log.status === "down") sitesDown++;
+          if (log.status === "up" && log.responseTime) {
+            totalResponseTime += log.responseTime;
+            upCount++;
+          }
+        }
+      }
+      const averageResponseTime = upCount > 0 ? Math.round(totalResponseTime / upCount) : 0;
+      const uptime = totalSites > 0 ? Math.round((sitesUp / totalSites) * 100) : 0;
+
+      res.json({
+        totalSites,
+        sitesUp,
+        sitesDown,
+        averageResponseTime,
+        uptime
+      });
     } catch (error) {
       console.error('Error fetching stats:', error);
       res.status(500).json({ message: "Failed to fetch stats" });
@@ -477,7 +565,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           testEmailAddress: ''
         },
         monitoringSettings: {
-          checkInterval: 1, // Currently every second
+          checkInterval: websites[0]?.checkInterval || 1, // Use the first website's interval or default to 1
           timeout: 30000,
           retries: 1,
           realTimeEnabled: true
@@ -641,6 +729,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error('Error deleting tag:', error);
       res.status(500).json({ message: "Failed to delete tag" });
     }
+  });
+
+  app.get("/api/monitoring/buffer", (req, res) => {
+    res.json(monitoringBuffer);
   });
 
   return server;

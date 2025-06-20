@@ -157,33 +157,6 @@ export default function Analytics() {
 
       {/* Charts */}
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="glass-card rounded-lg p-6 hover-card">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Response Time Trends</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={analytics?.responseTimeData || []}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
-              <XAxis dataKey="hour" className="text-xs" />
-              <YAxis className="text-xs" />
-              <Tooltip 
-                formatter={(value, name) => [`${value}ms`, 'Response Time']}
-                contentStyle={{ 
-                  backgroundColor: 'hsl(var(--background))',
-                  border: '1px solid hsl(var(--border))',
-                  borderRadius: '6px'
-                }}
-              />
-              <Legend />
-              <Line 
-                type="monotone" 
-                dataKey="averageResponseTime" 
-                stroke="hsl(var(--primary))" 
-                strokeWidth={2}
-                name="Avg Response Time (ms)"
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
         
         <div className="glass-card rounded-lg p-6 hover-card">
           <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Status Distribution</h3>
@@ -211,10 +184,6 @@ export default function Analytics() {
 
       {/* Moved Components */}
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="glass-card rounded-lg p-6 hover-card">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">24h Response Time</h3>
-          <PerformanceChart />
-        </div>
         <div className="glass-card rounded-lg p-6 hover-card">
           <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Recent Activity</h3>
           <ActivityFeed />

@@ -1,6 +1,6 @@
 import { websites, monitoringLogs, alerts, type Website, type NewWebsite, type MonitoringLog, type NewMonitoringLog, type Alert, type NewAlert, tags, type Tag, type NewTag } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql, and, gte } from "drizzle-orm";
+import { eq, desc, sql, and, gte, isNotNull } from "drizzle-orm";
 
 export interface IStorage {
   // Website operations
@@ -38,6 +38,11 @@ export interface IStorage {
   getTag(id: number): Promise<Tag | undefined>;
   updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined>;
   deleteTag(id: number): Promise<boolean>;
+
+  // New methods
+  getHourlyStats(websiteId: number, hours: number): Promise<{ timestamp: Date; avgResponseTime: number; uptime: number }[]>;
+  getDailyStats(websiteId: number, days: number): Promise<{ date: Date; avgResponseTime: number; uptime: number }[]>;
+  bulkInsertMonitoringLogs(logs: NewMonitoringLog[]): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -160,7 +165,7 @@ export class DatabaseStorage implements IStorage {
       .from(websites)
       .then(rows => rows[0]?.count || 0);
 
-    // Get the latest status for each website using a subquery or DISTINCT ON
+    // Get the latest status for each website using TimescaleDB's time_bucket
     const latestWebsiteStatuses = await db
       .selectDistinctOn([monitoringLogs.websiteId], {
         websiteId: monitoringLogs.websiteId,
@@ -174,13 +179,19 @@ export class DatabaseStorage implements IStorage {
     const sitesUp = latestWebsiteStatuses.filter(s => s.status === 'up').length;
     const sitesDown = latestWebsiteStatuses.filter(s => s.status === 'down').length;
 
-    const validResponseTimes = latestWebsiteStatuses
-      .filter(s => s.responseTime !== null)
-      .map(s => s.responseTime!);
-
-    const averageResponseTime = validResponseTimes.length > 0 
-      ? Math.round(validResponseTimes.reduce((a, b) => a + b, 0) / validResponseTimes.length) 
-      : 0;
+    // Calculate average response time using TimescaleDB's time_bucket
+    const responseTimeStats = await db
+      .select({
+        avgResponseTime: sql<number>`round(avg(response_time)::numeric, 2)`,
+      })
+      .from(monitoringLogs)
+      .where(
+        and(
+          eq(monitoringLogs.status, 'up'),
+          isNotNull(monitoringLogs.responseTime)
+        )
+      )
+      .then(rows => rows[0]?.avgResponseTime || 0);
 
     const uptime = totalSites > 0 ? Math.round((sitesUp / totalSites) * 100) : 0;
 
@@ -188,9 +199,51 @@ export class DatabaseStorage implements IStorage {
       totalSites,
       sitesUp,
       sitesDown,
-      averageResponseTime,
+      averageResponseTime: responseTimeStats,
       uptime
     };
+  }
+
+  // New method to get hourly statistics
+  async getHourlyStats(websiteId: number, hours: number = 24): Promise<{ timestamp: Date; avgResponseTime: number; uptime: number }[]> {
+    return db
+      .select({
+        timestamp: sql<Date>`time_bucket('1 hour', checked_at) as bucket`,
+        avgResponseTime: sql<number>`round(avg(response_time)::numeric, 2)`,
+        uptime: sql<number>`round((count(*) filter (where status = 'up')::float / count(*) * 100)::numeric, 2)`,
+      })
+      .from(monitoringLogs)
+      .where(
+        and(
+          eq(monitoringLogs.websiteId, websiteId),
+          gte(monitoringLogs.checkedAt, sql`now() - interval '${hours} hours'`)
+        )
+      )
+      .groupBy(sql`bucket`)
+      .orderBy(sql`bucket`);
+  }
+
+  // New method to get daily statistics
+  async getDailyStats(websiteId: number, days: number = 30): Promise<{
+    date: Date;
+    avgResponseTime: number;
+    uptime: number;
+  }[]> {
+    return db
+      .select({
+        date: sql<Date>`time_bucket('1 day', checked_at) as bucket`,
+        avgResponseTime: sql<number>`round(avg(response_time)::numeric, 2)`,
+        uptime: sql<number>`round((count(*) filter (where status = 'up')::float / count(*) * 100)::numeric, 2)`,
+      })
+      .from(monitoringLogs)
+      .where(
+        and(
+          eq(monitoringLogs.websiteId, websiteId),
+          gte(monitoringLogs.checkedAt, sql`now() - interval '${days} days'`)
+        )
+      )
+      .groupBy(sql`bucket`)
+      .orderBy(sql`bucket`);
   }
 
   async clearMonitoringLogs(): Promise<void> {
@@ -227,6 +280,14 @@ export class DatabaseStorage implements IStorage {
   async deleteTag(id: number): Promise<boolean> {
     const result = await db.delete(tags).where(eq(tags.id, id)).returning({ id: tags.id });
     return result.length > 0;
+  }
+
+  async bulkInsertMonitoringLogs(logs: NewMonitoringLog[]): Promise<void> {
+    if (logs.length === 0) return;
+    console.log('logsToInsert sample:', logs[0]);
+    console.log('Type:', typeof logs[0]);
+    console.log('All keys:', Object.keys(logs[0]));
+    await db.insert(monitoringLogs).values(logs);
   }
 }
 

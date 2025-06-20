@@ -4,6 +4,8 @@ import { Website } from "@shared/schema";
 import * as https from 'https';
 import * as tls from 'tls';
 import { URL } from 'url';
+import { db } from "./db";
+import { sql } from "drizzle-orm";
 
 interface MonitoringResult {
   status: 'up' | 'down' | 'error';
@@ -353,6 +355,25 @@ async function checkWebsite(url: string): Promise<MonitoringResult> {
 // Store monitoring intervals
 const monitoringIntervals = new Map<number, NodeJS.Timeout>();
 
+// Global buffer for monitoring logs
+import type { NewMonitoringLog } from "@shared/schema";
+const monitoringBuffer: NewMonitoringLog[] = [];
+
+// Batch insert every 5 minutes
+import { storage } from "./storage";
+setInterval(async () => {
+  if (monitoringBuffer.length > 0) {
+    const logsToInsert = monitoringBuffer.splice(0, monitoringBuffer.length);
+    try {
+      await storage.bulkInsertMonitoringLogs(logsToInsert);
+      console.log(`[BatchInsert] Inserted ${logsToInsert.length} monitoring logs`);
+    } catch (err) {
+      console.error("[BatchInsert] Failed to insert monitoring logs:", err);
+      // Optionally: re-add logsToInsert back to buffer if you want to retry
+    }
+  }
+}, 5 * 60 * 1000); // Every 5 minutes
+
 async function monitorWebsite(websiteId: number): Promise<MonitoringResult | undefined> {
   try {
     const website = await storage.getWebsite(websiteId);
@@ -370,18 +391,17 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
     const result = await checkWebsite(website.url);
     const now = new Date();
 
-    // Only create monitoring log if there's a status change
-    if (result.status !== website.lastStatus) {
-      await storage.createMonitoringLog({
-        websiteId,
-        status: result.status,
-        httpStatus: result.httpStatus,
-        responseTime: result.responseTime,
-        errorMessage: result.errorMessage,
-        changeType: 'status_change',
-        previousStatus: website.lastStatus
-      });
-    }
+    // Always create monitoring log for every check
+    monitoringBuffer.push({
+      websiteId,
+      status: result.status,
+      httpStatus: result.httpStatus,
+      responseTime: result.responseTime,
+      errorMessage: result.errorMessage,
+      checkedAt: now,
+      changeType: result.status !== website.lastStatus ? 'status_change' : 'regular_check',
+      previousStatus: website.lastStatus
+    });
 
     // Update website with status and SSL information
     if (website.url.startsWith('https://') && result.sslValid !== null) {
@@ -411,81 +431,16 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
       });
     }
 
-    // Check if we need to send an alert
-    let shouldSendAlert = false;
-    let message = '';
-
-    // Helper function to get a detailed message for specific HTTP status codes
-    const getHttpStatusMessage = (httpStatus?: number): string => {
-      if (!httpStatus) return '';
-      switch (httpStatus) {
-        case 400: return '400 Bad Request: The server cannot or will not process the request due to an apparent client error.';
-        case 401: return '401 Unauthorized: The client must authenticate itself to get the requested response.';
-        case 403: return '403 Forbidden: The client does not have access rights to the content.';
-        case 404: return '404 Not Found: The server cannot find the requested resource.';
-        case 405: return '405 Method Not Allowed: The request method is not supported by the server for the requested resource.';
-        case 500: return '500 Internal Server Error: A generic error message, given when an unexpected condition was encountered.';
-        case 501: return '501 Not Implemented: The server either does not recognize the request method, or it lacks the ability to fulfil the request.';
-        case 502: return '502 Bad Gateway: The server was acting as a gateway or proxy and received an invalid response from the upstream server.';
-        case 503: return '503 Service Unavailable: The server cannot handle the request (because it is overloaded or down for maintenance).';
-        case 504: return '504 Gateway Timeout: The server was acting as a gateway or proxy and did not receive a timely response from the upstream server.';
-        case 505: return '505 HTTP Version Not Supported: The server does not support the HTTP version used in the request.';
-        default: return '';
-      }
-    };
-
-    const lastStatus = website.lastStatus || 'unknown';
-
-    // Only send alert if the status has actually changed
-    if (result.status !== lastStatus) {
-      shouldSendAlert = true;
-      if (result.status === 'up') {
-        message = `Website ${website.name} is back up!`;
-      } else { // result.status === 'down'
-        let errorDetails = result.errorMessage ? `Error: ${result.errorMessage}` : '';
-        const httpStatusMessage = getHttpStatusMessage(result.httpStatus);
-        if (httpStatusMessage) {
-          errorDetails = `${httpStatusMessage}${errorDetails ? `. ${errorDetails}` : ''}`;
-        }
-        message = `Website ${website.name} is down! ${errorDetails}`;
-      }
-    }
-
-    // Check if SSL certificate is expiring soon (30 days or less)
-    if (result.sslValid === true && typeof result.sslDaysLeft === 'number' && result.sslDaysLeft <= 30) {
-      shouldSendAlert = true;
-      message = `SSL Certificate for ${website.name} is expiring in ${result.sslDaysLeft} days!`;
-    }
-
-    // Send alert if needed
-    if (shouldSendAlert) {
-      await sendAlert(website.email, {
-        websiteName: website.name,
-        websiteUrl: website.url,
-        status: result.status,
-        message,
-        timestamp: now,
-        responseTime: result.responseTime,
-        errorMessage: result.errorMessage,
-      });
-    }
-    
-    console.log(`${website.name}: ${result.status} (${result.responseTime || 'N/A'}ms) | SSL: ${result.sslValid === true ? 'Valid' : result.sslValid === false ? 'Invalid' : 'N/A'} ${result.sslDaysLeft ? `(${result.sslDaysLeft} days left)` : ''}`);
-    
     return result;
   } catch (error) {
-    console.error(`Error monitoring website ${websiteId}:`, error);
-    return {
-      status: 'error',
-      errorMessage: error instanceof Error ? error.message : 'Unknown error',
-      sslValid: null
-    };
+    console.error(`[monitorWebsite] Error monitoring website ${websiteId}:`, error);
+    return undefined;
   }
 }
 
+// Function to run a monitoring cycle for all websites
 export async function runMonitoringCycle() {
   try {
-    // This function is now only used for manual refresh
     const websites = await storage.getActiveWebsites();
     console.log(`Running monitoring cycle for ${websites.length} websites`);
     
@@ -499,54 +454,208 @@ export async function runMonitoringCycle() {
   }
 }
 
-// Function to schedule monitoring for a specific website
+// Function to clean up monitoring for a deleted website
+export function cleanupWebsiteMonitoring(websiteId: number) {
+  // Clear any existing monitoring schedule
+  if (monitoringIntervals.has(websiteId)) {
+    clearInterval(monitoringIntervals.get(websiteId));
+    monitoringIntervals.delete(websiteId);
+  }
+}
+
+// Function to schedule monitoring for a website
 function scheduleWebsiteMonitoring(website: Website) {
-  // Remove existing interval if it exists
+  // Clear any existing monitoring schedule
   if (monitoringIntervals.has(website.id)) {
     clearInterval(monitoringIntervals.get(website.id));
     monitoringIntervals.delete(website.id);
   }
-  
-  // Only schedule if the website is active
-  if (website.isActive) {
-    // Convert check_interval from minutes to milliseconds
-    const intervalMs = website.checkInterval * 60 * 1000;
-    
-    // Schedule the interval
-    const interval = setInterval(() => {
-      monitorWebsite(website.id).catch(error => {
-        console.error(`Error monitoring website ${website.id}:`, error);
-      });
-    }, intervalMs);
-    
-    monitoringIntervals.set(website.id, interval);
-    console.log(`Scheduled monitoring for ${website.name} every ${website.checkInterval} minutes`);
+
+  if (!website.isActive) {
+    return;
   }
+
+  const checkWebsite = async () => {
+    try {
+      // Verify website still exists and is active
+      const exists = await db.execute(sql`
+        SELECT id FROM websites 
+        WHERE id = ${website.id} AND is_active = true
+      `);
+
+      if (exists.length === 0) {
+        // Website no longer exists or is inactive, clean up
+        cleanupWebsiteMonitoring(website.id);
+        return;
+      }
+
+      await monitorWebsite(website.id);
+    } catch (error) {
+      console.error(`Error monitoring website ${website.id}:`, error);
+    }
+
+    // Schedule next check only if website still exists and is active
+    const stillActive = await db.execute(sql`
+      SELECT id FROM websites 
+      WHERE id = ${website.id} AND is_active = true
+    `);
+
+    if (stillActive.length > 0) {
+      const timeoutId = setTimeout(
+        checkWebsite,
+        website.checkInterval * 60 * 1000
+      );
+      monitoringIntervals.set(website.id, timeoutId);
+    }
+  };
+
+  // Start monitoring immediately
+  checkWebsite();
 }
 
 // Function to initialize monitoring for all websites
 export async function startMonitoring() {
   console.log('Starting website monitoring system...');
-  
   // Get all active websites
   const websites = await storage.getActiveWebsites();
-  
-  // Schedule monitoring for each website
+  // Schedule monitoring for each website at its own interval
   for (const website of websites) {
     scheduleWebsiteMonitoring(website);
   }
-  
-  // Run initial check immediately
-  setTimeout(() => {
-    runMonitoringCycle();
-  }, 2000);
-  
-  console.log('Monitoring system started with individual website intervals');
+  // Do NOT run a global timer or runMonitoringCycle here!
+  console.log('Monitoring system started with custom intervals');
+}
+
+// Function to verify compression policies
+export async function verifyCompressionPolicies() {
+  try {
+    // Get all active compression policies
+    const policies = await db.execute(sql`
+      SELECT 
+        job_id,
+        config->>'compress_after' as compress_after,
+        next_start,
+        hypertable_name
+      FROM timescaledb_information.jobs 
+      WHERE proc_name = 'policy_compression'
+      ORDER BY compress_after;
+    `);
+
+    // Get chunk information
+    const chunks = await db.execute(sql`
+      SELECT 
+        chunk_name,
+        range_start,
+        range_end,
+        is_compressed,
+        chunk_creation_time
+      FROM timescaledb_information.chunks
+      WHERE hypertable_name = 'monitoring_logs'
+      ORDER BY chunk_creation_time DESC
+      LIMIT 5;
+    `);
+
+    console.log('\n=== Compression Policies Status ===');
+    console.log('Active Policies:');
+    policies.forEach(policy => {
+      console.log(`- Compress after: ${policy.compress_after}`);
+      console.log(`  Next run: ${policy.next_start}`);
+    });
+
+    console.log('\nRecent Chunks:');
+    chunks.forEach(chunk => {
+      console.log(`- Chunk: ${chunk.chunk_name}`);
+      console.log(`  Created: ${chunk.chunk_creation_time}`);
+      console.log(`  Compressed: ${chunk.is_compressed}`);
+      console.log(`  Time Range: ${chunk.range_start} to ${chunk.range_end}`);
+    });
+    console.log('================================\n');
+
+    return { policies, chunks };
+  } catch (error) {
+    console.error('Error verifying compression policies:', error);
+    throw error;
+  }
 }
 
 // Function to update monitoring schedule for a website
 export function updateWebsiteMonitoring(website: Website) {
   scheduleWebsiteMonitoring(website);
+  
+  // Update compression policy to match the website's check interval
+  if (website.isActive) {
+    // Get all active websites with their check intervals
+    db.execute(sql`
+      -- Enable compression for the table if not already enabled
+      ALTER TABLE monitoring_logs SET (timescaledb.compress = true);
+      
+      -- Check if policy exists for this interval
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 
+          FROM timescaledb_information.jobs 
+          WHERE proc_name = 'policy_compression'
+          AND config->>'compress_after' = ${website.checkInterval} || ' minutes'
+        ) THEN
+          -- Add compression policy for this website's interval
+          PERFORM add_compression_policy(
+            'monitoring_logs',
+            INTERVAL ${website.checkInterval} || ' minutes'
+          );
+        END IF;
+      END $$;
+    `).then(() => {
+      console.log(`Ensured compression policy for ${website.name} with interval ${website.checkInterval} minutes`);
+      // Verify policies after update
+      verifyCompressionPolicies().catch(console.error);
+    }).catch(error => {
+      console.error(`Error updating compression policy for website ${website.id}:`, error);
+    });
+  }
+}
+
+// Function to initialize compression policies for all active websites
+export async function initializeCompressionPolicies() {
+  try {
+    // Get all active websites
+    const websites = await db.execute(sql`
+      SELECT id, name, check_interval 
+      FROM websites 
+      WHERE is_active = true
+    `);
+
+    // Enable compression
+    await db.execute(sql`
+      ALTER TABLE monitoring_logs SET (timescaledb.compress = true);
+    `);
+
+    // Create policies for each website
+    for (const website of websites) {
+      await db.execute(sql`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 
+            FROM timescaledb_information.jobs 
+            WHERE proc_name = 'policy_compression'
+            AND config->>'compress_after' = ${website.check_interval} || ' minutes'
+          ) THEN
+            PERFORM add_compression_policy(
+              'monitoring_logs',
+              INTERVAL ${website.check_interval} || ' minutes'
+            );
+          END IF;
+        END $$;
+      `);
+      console.log(`Ensured compression policy for ${website.name} with interval ${website.check_interval} minutes`);
+    }
+
+    // Verify all policies
+    await verifyCompressionPolicies();
+  } catch (error) {
+    console.error('Error initializing compression policies:', error);
+  }
 }
 
 // Function to stop monitoring for a website
@@ -560,3 +669,5 @@ export function stopWebsiteMonitoring(websiteId: number) {
 
 // Export for manual testing
 export { checkWebsite, monitorWebsite };
+
+export { monitoringBuffer };

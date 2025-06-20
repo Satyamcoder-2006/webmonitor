@@ -20,7 +20,7 @@ export const websites = pgTable("websites", {
   sslDaysLeft: integer("ssl_days_left"),
 });
 
-// Modified to only track important state changes
+// Modified to track all checks
 export const monitoringLogs = pgTable("monitoring_logs", {
   id: serial("id").primaryKey(),
   websiteId: integer("website_id").references(() => websites.id, { onDelete: 'cascade' }).notNull(),
@@ -28,8 +28,8 @@ export const monitoringLogs = pgTable("monitoring_logs", {
   httpStatus: integer("http_status"),
   responseTime: integer("response_time"), // milliseconds
   errorMessage: text("error_message"),
-  checkedAt: timestamp("checked_at").defaultNow().notNull(),
-  changeType: text("change_type").notNull(), // 'status_change', 'website_added', 'website_deleted'
+  checkedAt: timestamp("checked_at", { withTimezone: true }).defaultNow().notNull(),
+  changeType: text("change_type").notNull(), // 'status_change', 'regular_check', 'website_added', 'website_deleted'
   previousStatus: text("previous_status"), // Only populated for status changes
 });
 

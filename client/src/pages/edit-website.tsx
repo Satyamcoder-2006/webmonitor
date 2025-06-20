@@ -110,7 +110,6 @@ export default function EditWebsite() {
     mutationFn: async (data: z.infer<typeof formSchema>) => {
       const dataForSubmission = {
         ...data,
-        customTags: data.customTags ? data.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {}) : {},
       };
       const response = await apiRequest("PATCH", `/api/websites/${websiteId}`, dataForSubmission);
       if (!response.ok) {
@@ -362,8 +361,8 @@ export default function EditWebsite() {
                             className="ml-2 h-3 w-3 cursor-pointer" 
                             onClick={() => field.onChange((Array.isArray(field.value) ? field.value : []).filter((t: string) => t !== tag))}
                           />
-                        </Badge>
-                      ))}
+                          </Badge>
+                        ))}
                     </div>
                   )}
                   <FormDescription className="text-gray-600 dark:text-gray-400">
@@ -407,7 +406,7 @@ export default function EditWebsite() {
               <Button 
                 type="submit" 
                 disabled={updateWebsiteMutation.isPending} 
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {updateWebsiteMutation.isPending ? "Updating..." : "Update Website"}
               </Button>

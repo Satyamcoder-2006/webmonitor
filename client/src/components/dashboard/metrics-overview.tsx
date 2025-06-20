@@ -47,14 +47,6 @@ export default function MetricsOverview() {
       borderColor: "border-red-500/20",
     },
     {
-      title: "Avg Response",
-      value: `${stats?.averageResponseTime || 0}ms`,
-      icon: Clock,
-      bgColor: "bg-green-500/10",
-      iconColor: "text-green-500",
-      borderColor: "border-green-500/20",
-    },
-    {
       title: "SSL Health",
       value: `${sslHealth}%`,
       icon: Shield,
