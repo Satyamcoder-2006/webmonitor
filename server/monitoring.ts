@@ -359,17 +359,22 @@ const monitoringIntervals = new Map<number, NodeJS.Timeout>();
 import type { NewMonitoringLog } from "@shared/schema";
 const monitoringBuffer: NewMonitoringLog[] = [];
 
-// Batch insert every 5 minutes
-import { storage } from "./storage";
+const ARCHIVER_URL = 'http://localhost:6001/api/monitoring-logs/batch';
+
 setInterval(async () => {
   if (monitoringBuffer.length > 0) {
     const logsToInsert = monitoringBuffer.splice(0, monitoringBuffer.length);
     try {
-      await storage.bulkInsertMonitoringLogs(logsToInsert);
-      console.log(`[BatchInsert] Inserted ${logsToInsert.length} monitoring logs`);
+      await fetch(ARCHIVER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logsToInsert),
+      });
+      console.log(`[BatchSend] Sent ${logsToInsert.length} monitoring logs to archiver`);
     } catch (err) {
-      console.error("[BatchInsert] Failed to insert monitoring logs:", err);
+      console.error("[BatchSend] Failed to send monitoring logs to archiver:", err);
       // Optionally: re-add logsToInsert back to buffer if you want to retry
+      monitoringBuffer.unshift(...logsToInsert);
     }
   }
 }, 5 * 60 * 1000); // Every 5 minutes

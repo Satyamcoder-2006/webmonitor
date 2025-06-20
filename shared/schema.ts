@@ -60,14 +60,26 @@ export type Tag = typeof tags.$inferSelect;
 export type NewTag = typeof tags.$inferInsert;
 
 // Zod schemas
-export const insertWebsiteSchema = createInsertSchema(websites).extend({
-  customTags: z.array(z.string()).optional(),
-});
+export const insertWebsiteSchema = createInsertSchema(websites)
+  .omit({ customTags: true })
+  .extend({ customTags: z.array(z.string()).optional() });
 export const selectWebsiteSchema = createSelectSchema(websites);
-export const updateWebsiteSchema = createSelectSchema(websites).partial().extend({
-  customTags: z.array(z.string()).optional(),
+export const updateWebsiteSchema = createSelectSchema(websites)
+  .partial()
+  .omit({ customTags: true })
+  .extend({ customTags: z.array(z.string()).optional() });
+
+export const insertMonitoringLogSchema = z.object({
+  websiteId: z.number(),
+  status: z.string(),
+  httpStatus: z.number().nullable().optional(),
+  responseTime: z.number().nullable().optional(),
+  errorMessage: z.string().nullable().optional(),
+  checkedAt: z.coerce.date(),
+  changeType: z.string(),
+  previousStatus: z.string().nullable().optional(),
 });
-export const insertMonitoringLogSchema = createInsertSchema(monitoringLogs);
+
 export const selectMonitoringLogSchema = createSelectSchema(monitoringLogs);
 export const insertAlertSchema = createInsertSchema(alerts);
 export const selectAlertSchema = createSelectSchema(alerts);

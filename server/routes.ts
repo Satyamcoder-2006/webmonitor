@@ -735,5 +735,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(monitoringBuffer);
   });
 
+  // Compression status endpoint
+  app.get("/api/compression-status", async (req, res) => {
+    try {
+      const { verifyCompressionPolicies } = await import("./monitoring");
+      const result = await verifyCompressionPolicies();
+      res.json(result);
+    } catch (error) {
+      console.error("Error fetching compression status:", error);
+      res.status(500).json({ message: "Failed to fetch compression status" });
+    }
+  });
+
   return server;
 }
