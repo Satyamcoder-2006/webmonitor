@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertWebsiteSchema, selectWebsiteSchema, updateWebsiteSchema, insertTagSchema, selectTagSchema, Website, NewWebsite } from "@shared/schema";
+import { insertWebsiteSchema, selectWebsiteSchema, updateWebsiteSchema, insertTagSchema, selectTagSchema, Website, NewWebsite, compressionRetentionSchema } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import { WebSocketServer } from 'ws';
@@ -99,14 +99,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new website
   app.post("/api/websites", async (req, res) => {
     try {
-      const validatedData = insertWebsiteSchema.parse(req.body);
+      const baseData = insertWebsiteSchema.parse(req.body);
+      const { compressionValue, compressionUnit, retentionValue, retentionUnit } = compressionRetentionSchema.parse(req.body);
+      const dataForStorage: NewWebsite = { ...baseData, compressionValue, compressionUnit, retentionValue, retentionUnit };
 
-      const dataForStorage: NewWebsite = { ...validatedData };
-
-      if (Array.isArray(validatedData.customTags)) {
-        dataForStorage.customTags = validatedData.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
+      if (Array.isArray(dataForStorage.customTags)) {
+        dataForStorage.customTags = dataForStorage.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
       } else {
         dataForStorage.customTags = {}; // Ensure it's an empty object if no tags or not an array
+      }
+
+      // Ensure compressionInterval and retentionPeriod are set
+      if (dataForStorage.compressionInterval) {
+        dataForStorage.compressionInterval = dataForStorage.compressionInterval;
+      }
+      if (dataForStorage.retentionPeriod) {
+        dataForStorage.retentionPeriod = dataForStorage.retentionPeriod;
       }
 
       const website = await storage.createWebsite(dataForStorage);
@@ -135,12 +143,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
-      const updates = updateWebsiteSchema.parse(req.body);
+      const baseUpdates = updateWebsiteSchema.parse(req.body);
+      const retentionFields = compressionRetentionSchema.partial().parse(req.body);
+      const dataForStorage: Partial<Website> = { ...baseUpdates, ...retentionFields };
 
-      const dataForStorage: Partial<Website> = { ...updates };
-
-      if (Array.isArray(updates.customTags)) {
-        dataForStorage.customTags = updates.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
+      if (Array.isArray(dataForStorage.customTags)) {
+        dataForStorage.customTags = dataForStorage.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
+      }
+      // Ensure compressionInterval and retentionPeriod are set
+      if (dataForStorage.compressionInterval) {
+        dataForStorage.compressionInterval = dataForStorage.compressionInterval;
+      }
+      if (dataForStorage.retentionPeriod) {
+        dataForStorage.retentionPeriod = dataForStorage.retentionPeriod;
       }
 
       const website = await storage.updateWebsite(id, dataForStorage);
@@ -150,7 +165,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Update monitoring schedule if check_interval changed
-      if (updates.checkInterval !== undefined) {
+      if (dataForStorage.checkInterval !== undefined) {
         const { updateWebsiteMonitoring } = await import("./monitoring");
         updateWebsiteMonitoring(website);
       }
@@ -556,8 +571,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/settings", async (req, res) => {
     try {
       const websites = await storage.getWebsites();
+      const first = websites[0];
       const allLogs = await storage.getMonitoringLogs(undefined, 100);
-      
       const settings = {
         emailSettings: {
           smtpConfigured: !!(process.env.EMAIL_USER && process.env.EMAIL_PASS),
@@ -565,7 +580,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           testEmailAddress: ''
         },
         monitoringSettings: {
-          checkInterval: websites[0]?.checkInterval || 1, // Use the first website's interval or default to 1
+          checkInterval: first?.checkInterval || 1, // Use the first website's interval or default to 1
           timeout: 30000,
           retries: 1,
           realTimeEnabled: true
@@ -581,9 +596,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           totalSites: websites.length,
           totalChecks: allLogs.length,
           lastRestart: new Date().toISOString()
-        }
+        },
+        compressionValue: first?.compressionValue ?? 10,
+        compressionUnit: first?.compressionUnit ?? "minutes",
+        retentionValue: first?.retentionValue ?? 90,
+        retentionUnit: first?.retentionUnit ?? "days",
       };
-      
       res.json(settings);
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -594,9 +612,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update settings endpoint
   app.put("/api/settings", async (req, res) => {
     try {
-      // In a real app, you'd save these settings to a database
-      // For now, we'll just acknowledge the update
-      res.json({ message: "Settings updated successfully" });
+      const websites = await storage.getWebsites();
+      if (websites.length === 0) {
+        return res.status(404).json({ message: "No websites found" });
+      }
+      for (const website of websites) {
+        await storage.updateWebsite(website.id, {
+          compressionValue: req.body.compressionValue,
+          compressionUnit: req.body.compressionUnit,
+          retentionValue: req.body.retentionValue,
+          retentionUnit: req.body.retentionUnit,
+        });
+        // Update monitoring/compression policy for each website
+        const updated = await storage.getWebsite(website.id);
+        if (updated) {
+          const { updateWebsiteMonitoring } = await import("./monitoring");
+          updateWebsiteMonitoring(updated);
+        }
+      }
+      res.json({ message: "Settings updated for all websites" });
     } catch (error) {
       console.error('Error updating settings:', error);
       res.status(500).json({ message: "Failed to update settings" });

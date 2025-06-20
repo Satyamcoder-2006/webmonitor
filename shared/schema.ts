@@ -18,6 +18,12 @@ export const websites = pgTable("websites", {
   sslValid: boolean("ssl_valid"),
   sslExpiryDate: timestamp("ssl_expiry_date"),
   sslDaysLeft: integer("ssl_days_left"),
+  compressionInterval: text("compression_interval").default('10 minutes'),
+  retentionPeriod: text("retention_period").default('90 days'),
+  compressionValue: integer("compression_value").default(10),
+  compressionUnit: text("compression_unit").default('minutes'),
+  retentionValue: integer("retention_value").default(90),
+  retentionUnit: text("retention_unit").default('days'),
 });
 
 // Modified to track all checks
@@ -62,12 +68,24 @@ export type NewTag = typeof tags.$inferInsert;
 // Zod schemas
 export const insertWebsiteSchema = createInsertSchema(websites)
   .omit({ customTags: true })
-  .extend({ customTags: z.array(z.string()).optional() });
+  .extend({
+    customTags: z.array(z.string()).optional(),
+  });
 export const selectWebsiteSchema = createSelectSchema(websites);
 export const updateWebsiteSchema = createSelectSchema(websites)
   .partial()
   .omit({ customTags: true })
-  .extend({ customTags: z.array(z.string()).optional() });
+  .extend({
+    customTags: z.array(z.string()).optional(),
+  });
+
+// Plain Zod schema for compression/retention fields
+export const compressionRetentionSchema = z.object({
+  compressionValue: z.number().min(1),
+  compressionUnit: z.enum(["minutes", "hours", "days"]),
+  retentionValue: z.number().min(1),
+  retentionUnit: z.enum(["minutes", "hours", "days"]),
+});
 
 export const insertMonitoringLogSchema = z.object({
   websiteId: z.number(),

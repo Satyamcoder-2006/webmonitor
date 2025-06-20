@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,12 @@ interface SystemSettings {
     totalChecks: number;
     lastRestart: string;
   };
+  compressionInterval?: string;
+  retentionPeriod?: string;
+  compressionValue?: number;
+  compressionUnit?: string;
+  retentionValue?: number;
+  retentionUnit?: string;
 }
 
 export default function Settings() {
@@ -50,7 +56,7 @@ export default function Settings() {
   });
 
   const updateSettingsMutation = useMutation({
-    mutationFn: async (newSettings: Partial<SystemSettings>) => {
+    mutationFn: async (newSettings: any) => {
       await apiRequest("PUT", "/api/settings", newSettings);
     },
     onSuccess: () => {
@@ -127,6 +133,39 @@ export default function Settings() {
       });
     },
   });
+
+  // Local state for compression/retention
+  const [compressionValue, setCompressionValue] = useState(settings?.compressionValue ?? 10);
+  const [compressionUnit, setCompressionUnit] = useState(settings?.compressionUnit ?? 'minutes');
+  const [retentionValue, setRetentionValue] = useState(settings?.retentionValue ?? 90);
+  const [retentionUnit, setRetentionUnit] = useState(settings?.retentionUnit ?? 'days');
+  const [saving, setSaving] = useState(false);
+
+  const handleSaveCompressionRetention = async () => {
+    setSaving(true);
+    try {
+      await updateSettingsMutation.mutateAsync({
+        compressionValue,
+        compressionUnit,
+        retentionValue,
+        retentionUnit,
+      });
+      toast({ title: 'Settings updated', description: 'Compression and retention settings saved.' });
+    } catch (error: any) {
+      toast({ title: 'Failed to update', description: error.message, variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (settings) {
+      setCompressionValue(settings.compressionValue ?? 10);
+      setCompressionUnit(settings.compressionUnit ?? "minutes");
+      setRetentionValue(settings.retentionValue ?? 90);
+      setRetentionUnit(settings.retentionUnit ?? "days");
+    }
+  }, [settings]);
 
   if (isLoading || !settings) {
     return (
@@ -270,6 +309,65 @@ export default function Settings() {
           <h2 className="text-xl font-semibold flex items-center text-blue-600 dark:text-blue-400">
             <Settings2 className="h-5 w-5 mr-2 text-blue-600 dark:text-blue-400" /> System Management
           </h2>
+
+          {/* Compression & Retention Settings */}
+          <div className="glass-card rounded-lg p-4 mb-4">
+            <h3 className="text-lg font-medium mb-2 text-gray-900 dark:text-white">Compression & Retention</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="compressionValue" className="text-gray-900 dark:text-white">Compression Interval</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="compressionValue"
+                    type="number"
+                    min={1}
+                    value={compressionValue}
+                    onChange={e => setCompressionValue(Number(e.target.value))}
+                    className="glass-button w-24 text-gray-900 dark:text-white"
+                  />
+                  <Select value={compressionUnit} onValueChange={setCompressionUnit}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="minutes">Minutes</SelectItem>
+                      <SelectItem value="hours">Hours</SelectItem>
+                      <SelectItem value="days">Days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="retentionValue" className="text-gray-900 dark:text-white">Retention Period</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="retentionValue"
+                    type="number"
+                    min={1}
+                    value={retentionValue}
+                    onChange={e => setRetentionValue(Number(e.target.value))}
+                    className="glass-button w-24 text-gray-900 dark:text-white"
+                  />
+                  <Select value={retentionUnit} onValueChange={setRetentionUnit}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="minutes">Minutes</SelectItem>
+                      <SelectItem value="hours">Hours</SelectItem>
+                      <SelectItem value="days">Days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+            <Button onClick={handleSaveCompressionRetention} disabled={saving} className="mt-4 glass-button text-blue-600 dark:text-blue-400 border-blue-600/50 dark:border-blue-400/50">
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+              Adjust how long data is kept and how often it is compressed. Example: 10 minutes, 1 hour, 90 days.
+            </p>
+          </div>
 
           <div className="space-y-4">
             <div className="glass-card rounded-lg p-4">

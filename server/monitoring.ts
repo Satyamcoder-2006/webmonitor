@@ -587,35 +587,28 @@ export async function verifyCompressionPolicies() {
 export function updateWebsiteMonitoring(website: Website) {
   scheduleWebsiteMonitoring(website);
   
-  // Update compression policy to match the website's check interval
+  // Update compression and retention policies to match the website's settings
   if (website.isActive) {
-    // Get all active websites with their check intervals
+    const compressionInterval = website.compressionValue && website.compressionUnit ? `${website.compressionValue} ${website.compressionUnit}` : '10 minutes';
+    const retentionPeriod = website.retentionValue && website.retentionUnit ? `${website.retentionValue} ${website.retentionUnit}` : '90 days';
     db.execute(sql`
       -- Enable compression for the table if not already enabled
       ALTER TABLE monitoring_logs SET (timescaledb.compress = true);
-      
-      -- Check if policy exists for this interval
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 
-          FROM timescaledb_information.jobs 
-          WHERE proc_name = 'policy_compression'
-          AND config->>'compress_after' = ${website.checkInterval} || ' minutes'
-        ) THEN
-          -- Add compression policy for this website's interval
-          PERFORM add_compression_policy(
-            'monitoring_logs',
-            INTERVAL ${website.checkInterval} || ' minutes'
-          );
-        END IF;
-      END $$;
+      -- Remove existing compression policy (if any)
+      SELECT remove_compression_policy('monitoring_logs');
+      -- Add new compression policy
+      SELECT add_compression_policy('monitoring_logs', INTERVAL ${compressionInterval});
+      -- Remove existing retention policy (if any)
+      SELECT remove_retention_policy('monitoring_logs');
+      -- Add new retention policy
+      SELECT add_retention_policy('monitoring_logs', INTERVAL ${retentionPeriod});
     `).then(() => {
-      console.log(`Ensured compression policy for ${website.name} with interval ${website.checkInterval} minutes`);
+      console.log(`Ensured compression policy for ${website.name} with interval ${compressionInterval}`);
+      console.log(`Ensured retention policy for ${website.name} with period ${retentionPeriod}`);
       // Verify policies after update
       verifyCompressionPolicies().catch(console.error);
     }).catch(error => {
-      console.error(`Error updating compression policy for website ${website.id}:`, error);
+      console.error(`Error updating compression/retention policy for website ${website.id}:`, error);
     });
   }
 }

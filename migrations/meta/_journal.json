@@ -15,6 +15,20 @@
       "when": 1750042759610,
       "tag": "0001_nappy_agent_zero",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1750400529068,
+      "tag": "0002_misty_domino",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1750407387050,
+      "tag": "0003_big_princess_powerful",
+      "breakpoints": true
     }
   ]
 }
