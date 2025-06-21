@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, RefreshCw, Edit, Pause, Trash2, Globe, Play } from "lucide-react";
+import { Download, RefreshCw, Edit, Pause, Trash2, Globe, Play, BarChart3 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -308,6 +308,14 @@ export default function SitesTable({ searchQuery, selectedTags, websites, isLoad
                         onCheckedChange={(checked) => toggleWebsiteMutation.mutate({ id: website.id, isActive: checked })}
                         className="data-[state=checked]:bg-blue-600 data-[state=unchecked]:bg-gray-200 dark:data-[state=unchecked]:bg-gray-700"
                       />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/website-analytics?websiteId=${website.id}`)}
+                        title="View Analytics"
+                      >
+                        <BarChart3 className="h-4 w-4" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"

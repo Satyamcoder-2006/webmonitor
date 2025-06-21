@@ -40,6 +40,12 @@ export interface IStorage {
   // Clear all websites and their data
   clearAllWebsitesAndData(): Promise<void>;
 
+  // Tag operations
+  createTag(tag: NewTag): Promise<Tag>;
+  getTags(): Promise<Tag[]>;
+  updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined>;
+  deleteTag(id: number): Promise<boolean>;
+
   // New methods
   getHourlyStats(websiteId: number, hours: number): Promise<{ timestamp: Date; avgResponseTime: number; uptime: number }[]>;
   getDailyStats(websiteId: number, days: number): Promise<{ date: Date; avgResponseTime: number; uptime: number }[]>;
@@ -302,6 +308,33 @@ export class DatabaseStorage implements IStorage {
 
   async bulkInsertMonitoringLogs(logs: NewMonitoringLog[]): Promise<void> {
     await db.insert(monitoringLogs).values(logs);
+  }
+
+  // Tag Operations
+  async createTag(tag: NewTag): Promise<Tag> {
+    const [result] = await db
+      .insert(tags)
+      .values(tag)
+      .returning();
+    return result;
+  }
+
+  async getTags(): Promise<Tag[]> {
+    return await db.select().from(tags).orderBy(tags.name);
+  }
+
+  async updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined> {
+    const [updated] = await db
+      .update(tags)
+      .set(updates)
+      .where(eq(tags.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteTag(id: number): Promise<boolean> {
+    const result = await db.delete(tags).where(eq(tags.id, id)).returning();
+    return result.length > 0;
   }
 }
 

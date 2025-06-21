@@ -251,42 +251,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
-      // Get website details before deletion for alert
+      // Stop monitoring before deleting
+      const { stopWebsiteMonitoring } = await import("./monitoring");
+      stopWebsiteMonitoring(id);
+      
       const website = await storage.getWebsite(id);
       if (!website) {
         return res.status(404).json({ message: "Website not found" });
       }
-
-      // Stop monitoring for this website
-      const { stopWebsiteMonitoring } = await import("./monitoring");
-      stopWebsiteMonitoring(id);
       
-      const deleted = await storage.deleteWebsite(id);
-      if (!deleted) {
-        return res.status(404).json({ message: "Website not found" });
-      }
+      await storage.deleteWebsite(id);
 
-      // Send email alert for website deletion
+      // Create alert for website deletion
       try {
-        const { sendAlert } = await import('./email');
-        await sendAlert(website.email, {
-          websiteName: website.name,
-          websiteUrl: website.url,
-          status: 'deleted',
-          message: `Website "${website.name}" (${website.url}) has been removed from WebMonitor monitoring.`,
-          timestamp: new Date(),
-          responseTime: undefined,
-          errorMessage: undefined
+        const { alerts } = await import("@shared/schema");
+        await db.insert(alerts).values({
+          websiteId: id,
+          alertType: 'website_removed',
+          message: `Website "${website.name}" (${website.url}) has been removed from monitoring.`,
+          sentAt: new Date(),
+          emailSent: false,
+          read: false
         });
-        
-        console.log(`[Alert] Website deletion alert sent for ${website.name}`);
       } catch (alertError) {
-        console.error(`[Alert] Failed to send website deletion alert for ${website.name}:`, alertError);
+        console.error(`[Alert] Failed to create website deletion alert for ${website.name}:`, alertError);
       }
       
+      console.log(`Website with ID: ${id} deleted successfully`);
       res.status(204).send();
     } catch (error) {
-      console.error('Error deleting website:', error);
+      console.error(`Error deleting website with ID: ${req.params.id}`, error);
       res.status(500).json({ message: "Failed to delete website" });
     }
   });
@@ -715,6 +709,187 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Individual website analytics endpoint
+  app.get("/api/analytics/website/:websiteId", async (req, res) => {
+    try {
+      const websiteId = parseInt(req.params.websiteId);
+      const timeRange = req.query.timeRange as string || "24h";
+      let startDate: Date | undefined;
+
+      switch (timeRange) {
+        case "24h":
+          startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+          break;
+        case "7d":
+          startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case "30d":
+          startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+          break;
+        case "90d":
+          startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+          break;
+        default:
+          startDate = undefined;
+      }
+
+      const [website, filteredLogs] = await Promise.all([
+        storage.getWebsite(websiteId),
+        storage.getMonitoringLogs(websiteId, 10000, startDate),
+      ]);
+
+      if (!website) {
+        return res.status(404).json({ message: "Website not found" });
+      }
+
+      // --- Uptime & Downtime ---
+      const totalChecks = filteredLogs.length;
+      const upChecks = filteredLogs.filter(log => log.status === 'up').length;
+      const downtimeEvents = filteredLogs.filter(log => log.status === 'down').length;
+      const uptimePercentage = totalChecks > 0 ? Math.round((upChecks / totalChecks) * 100) : 0;
+      const totalDowntime = filteredLogs.filter(log => log.status === 'down').length * 5; // 5 min interval assumed
+
+      // --- Performance ---
+      const validResponseTimes = filteredLogs.filter(log => log.responseTime && log.responseTime > 0).map(log => log.responseTime!);
+      const averageResponseTime = validResponseTimes.length > 0 ? Math.round(validResponseTimes.reduce((sum, v) => sum + v, 0) / validResponseTimes.length) : 0;
+      const sortedResponseTimes = [...validResponseTimes].sort((a, b) => a - b);
+      const percentile = (arr: number[], p: number) => arr.length ? arr[Math.floor((p / 100) * arr.length)] : 0;
+      const p95ResponseTime = percentile(sortedResponseTimes, 95);
+      const p99ResponseTime = percentile(sortedResponseTimes, 99);
+      const slowestResponseTime = sortedResponseTimes[sortedResponseTimes.length - 1] || 0;
+      const fastestResponseTime = sortedResponseTimes[0] || 0;
+
+      // --- Status Codes ---
+      const statusCodeCounts = filteredLogs.reduce((acc, log) => {
+        if (log.httpStatus) acc[log.httpStatus] = (acc[log.httpStatus] || 0) + 1;
+        return acc;
+      }, {} as Record<number, number>);
+      const mostFrequentErrorCodes = Object.entries(statusCodeCounts)
+        .filter(([code]) => Number(code) >= 400)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([code, count]) => ({ code: Number(code), count }));
+
+      // --- Alerts for this website ---
+      const alerts = await storage.getAlerts(websiteId, 50);
+      const numberOfAlerts = alerts.length;
+
+      // --- Recovery times ---
+      let recoveryTimes: number[] = [];
+      let lastDownTime: Date | null = null;
+      for (const log of filteredLogs) {
+        if (log.status === 'down') {
+          lastDownTime = new Date(log.checkedAt);
+        } else if (log.status === 'up' && lastDownTime) {
+          const upTime = new Date(log.checkedAt);
+          recoveryTimes.push((upTime.getTime() - lastDownTime.getTime()) / 60000); // in minutes
+          lastDownTime = null;
+        }
+      }
+      const averageTimeToRecovery = recoveryTimes.length > 0 ? Math.round(recoveryTimes.reduce((a, b) => a + b, 0) / recoveryTimes.length) : 0;
+
+      // --- Missed checks ---
+      let missedChecks = 0;
+      const sortedLogs = filteredLogs.sort((a, b) => new Date(a.checkedAt).getTime() - new Date(b.checkedAt).getTime());
+      for (let i = 1; i < sortedLogs.length; i++) {
+        const prev = new Date(sortedLogs[i - 1].checkedAt).getTime();
+        const curr = new Date(sortedLogs[i].checkedAt).getTime();
+        if (curr - prev > 6 * 60 * 1000) missedChecks++; // >6min gap
+      }
+
+      // --- SSL info for this website ---
+      const sslInfo = website.url.startsWith('https://') ? {
+        sslValid: website.sslValid,
+        sslExpiryDate: website.sslExpiryDate,
+        sslDaysLeft: website.sslDaysLeft,
+        isExpiring: website.sslDaysLeft !== null && website.sslDaysLeft <= 30 && website.sslDaysLeft > 0,
+        isExpired: website.sslDaysLeft !== null && website.sslDaysLeft <= 0
+      } : null;
+
+      // --- Response time data by hour (or day for longer ranges) ---
+      const groupedData = new Map();
+      const formatKey = (date: Date) => {
+        if (timeRange === "24h") {
+          return `${date.getHours().toString().padStart(2, '0')}:00`;
+        } else {
+          return date.toLocaleDateString(); // Group by day for longer ranges
+        }
+      };
+      validResponseTimes.forEach((rt, i) => {
+        const log = filteredLogs.filter(l => l.responseTime && l.responseTime > 0)[i];
+        const key = formatKey(new Date(log.checkedAt));
+        if (!groupedData.has(key)) {
+          groupedData.set(key, { total: 0, count: 0 });
+        }
+        const data = groupedData.get(key);
+        data.total += rt;
+        data.count += 1;
+      });
+      const responseTimeData = Array.from(groupedData.entries())
+        .map(([key, data]) => ({
+          hour: key,
+          averageResponseTime: Math.round(data.total / data.count),
+          checks: data.count
+        }))
+        .sort((a, b) => a.hour.localeCompare(b.hour));
+
+      // --- Status distribution ---
+      const statusCounts = filteredLogs.reduce((acc, log) => {
+        acc[log.status] = (acc[log.status] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+      const statusDistribution = Object.entries(statusCounts).map(([status, count]) => ({
+        status,
+        count,
+        percentage: totalChecks > 0 ? Math.round((count / totalChecks) * 100) : 0
+      }));
+
+      // --- Recent activity ---
+      const recentActivity = filteredLogs
+        .sort((a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime())
+        .slice(0, 20)
+        .map(log => ({
+          timestamp: log.checkedAt,
+          status: log.status,
+          responseTime: log.responseTime,
+          httpStatus: log.httpStatus,
+          errorMessage: log.errorMessage
+        }));
+
+      res.json({
+        website: {
+          id: website.id,
+          name: website.name,
+          url: website.url,
+          checkInterval: website.checkInterval,
+          isActive: website.isActive,
+          customTags: website.customTags
+        },
+        totalChecks,
+        averageResponseTime,
+        p95ResponseTime,
+        p99ResponseTime,
+        slowestResponseTime,
+        fastestResponseTime,
+        uptimePercentage,
+        downtimeEvents,
+        totalDowntime,
+        statusCodeCounts,
+        mostFrequentErrorCodes,
+        numberOfAlerts,
+        averageTimeToRecovery,
+        missedChecks,
+        sslInfo,
+        responseTimeData,
+        statusDistribution,
+        recentActivity
+      });
+    } catch (error) {
+      console.error('Error fetching website analytics:', error);
+      res.status(500).json({ message: "Failed to fetch website analytics" });
+    }
+  });
+
   // Test email endpoint
   app.post("/api/test-email", async (req, res) => {
     try {
@@ -950,6 +1125,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching compression status:", error);
       res.status(500).json({ message: "Failed to fetch compression status" });
+    }
+  });
+
+  // Get all tags
+  app.get("/api/tags", async (req, res) => {
+    try {
+      const tags = await storage.getTags();
+      res.json(tags);
+    } catch (error) {
+      console.error('Error fetching tags:', error);
+      res.status(500).json({ message: "Failed to fetch tags" });
+    }
+  });
+
+  // Create new tag
+  app.post("/api/tags", async (req, res) => {
+    try {
+      const validatedData = insertTagSchema.parse(req.body);
+      const tag = await storage.createTag(validatedData);
+      res.status(201).json(tag);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const validationError = fromZodError(error);
+        res.status(400).json({ message: validationError.message });
+      } else {
+        console.error('Error creating tag:', error);
+        res.status(500).json({ message: "Failed to create tag" });
+      }
+    }
+  });
+
+  // Update tag
+  app.patch("/api/tags/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid tag ID" });
+      }
+      const validatedData = insertTagSchema.pick({ name: true }).parse(req.body);
+      const tag = await storage.updateTag(id, validatedData);
+      if (!tag) {
+        return res.status(404).json({ message: "Tag not found" });
+      }
+      res.json(tag);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const validationError = fromZodError(error);
+        res.status(400).json({ message: validationError.message });
+      } else {
+        console.error('Error updating tag:', error);
+        res.status(500).json({ message: "Failed to update tag" });
+      }
+    }
+  });
+
+  // Delete tag
+  app.delete("/api/tags/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: "Invalid tag ID" });
+      }
+      await storage.deleteTag(id);
+      res.status(204).send();
+    } catch (error) {
+      console.error(`Error deleting tag with ID: ${req.params.id}`, error);
+      res.status(500).json({ message: "Failed to delete tag" });
+    }
+  });
+
+  // Endpoint to get global compression and retention policies
+  app.get("/api/settings/retention", async (req, res) => {
+    try {
+      const policies = await db.execute(sql`
+        SELECT * FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention' AND hypertable_name = 'monitoring_logs';
+      `);
+      res.json(policies);
+    } catch (error) {
+      console.error('Error fetching retention settings:', error);
+      res.status(500).json({ message: "Failed to fetch retention settings" });
+    }
+  });
+
+  // Endpoint to update global compression and retention policies
+  app.post("/api/settings/retention", async (req, res) => {
+    try {
+      const {
+        compressionValue,
+        compressionUnit,
+        retentionValue,
+        retentionUnit,
+        retentionScheduleValue,
+        retentionScheduleUnit,
+      } = compressionRetentionSchema.parse(req.body);
+
+      await updateGlobalPolicies(
+        compressionValue,
+        compressionUnit,
+        retentionValue,
+        retentionUnit,
+        retentionScheduleValue,
+        retentionScheduleUnit
+      );
+
+      res.json({ message: "Global compression and retention policies updated successfully" });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const validationError = fromZodError(error);
+        return res.status(400).json({ message: validationError.message });
+      }
+      console.error('Error updating retention settings:', error);
+      res.status(500).json({ message: "Failed to update retention settings" });
     }
   });
 

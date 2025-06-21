@@ -9,6 +9,7 @@ import Dashboard from "@/pages/dashboard";
 import AddWebsite from "@/pages/add-website";
 import EditWebsite from "@/pages/edit-website";
 import Analytics from "@/pages/analytics";
+import WebsiteAnalytics from "@/pages/website-analytics";
 import Settings from "@/pages/settings";
 import TagsPage from "@/pages/tags";
 import Alerts from "@/pages/alerts";
@@ -30,6 +31,7 @@ function App() {
                   <Route path="/websites/new" element={<AddWebsite />} />
                   <Route path="/edit/:id" element={<EditWebsite />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/website-analytics" element={<WebsiteAnalytics />} />
                   <Route path="/alerts" element={<Alerts />} />
                   <Route path="/tags" element={<TagsPage />} />
                   <Route path="/settings" element={<Settings />} />
