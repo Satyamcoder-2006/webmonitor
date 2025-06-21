@@ -6,6 +6,7 @@ import * as tls from 'tls';
 import { URL } from 'url';
 import { db } from "./db";
 import { sql } from "drizzle-orm";
+import { alerts } from "@shared/schema";
 
 interface MonitoringResult {
   status: 'up' | 'down' | 'error';
@@ -398,29 +399,99 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
 
     // Always create monitoring log for every check
     monitoringBuffer.push({
-      websiteId,
-      status: result.status,
-      httpStatus: result.httpStatus,
-      responseTime: result.responseTime,
-      errorMessage: result.errorMessage,
+        websiteId,
+        status: result.status,
+        httpStatus: result.httpStatus,
+        responseTime: result.responseTime,
+        errorMessage: result.errorMessage,
       checkedAt: now,
       changeType: result.status !== website.lastStatus ? 'status_change' : 'regular_check',
-      previousStatus: website.lastStatus
-    });
+        previousStatus: website.lastStatus
+      });
 
-    // Update website with status and SSL information
-    if (website.url.startsWith('https://') && result.sslValid !== null) {
-      await storage.updateWebsite(website.id, {
-        lastStatus: result.status,
-        sslValid: result.sslValid,
-        sslExpiryDate: result.sslExpiryDate,
-        sslDaysLeft: result.sslDaysLeft
-      });
-    } else {
-      await storage.updateWebsite(website.id, {
-        lastStatus: result.status
-      });
+    // Check if status has changed and handle alerts
+    const statusChanged = result.status !== website.lastStatus;
+    let shouldSendAlert = false;
+    let alertType = '';
+    let alertMessage = '';
+
+    if (statusChanged) {
+      // Determine alert type and message
+      if (result.status === 'down') {
+        alertType = 'down';
+        alertMessage = `Website is down. ${result.errorMessage ? `Error: ${result.errorMessage}` : 'No response from server.'}`;
+        shouldSendAlert = true;
+      } else if (result.status === 'up' && website.lastStatus === 'down') {
+        alertType = 'up';
+        alertMessage = `Website is back online. Response time: ${result.responseTime}ms`;
+        shouldSendAlert = true;
+      } else if (result.status === 'error') {
+        alertType = 'error';
+        alertMessage = `Website error: ${result.errorMessage || 'Unknown error occurred'}`;
+        shouldSendAlert = true;
+      }
+
+      // Check alert cooldown (5 minutes default)
+      const alertCooldown = 5 * 60 * 1000; // 5 minutes in milliseconds
+      const lastAlertTime = website.lastAlertSent;
+      const timeSinceLastAlert = lastAlertTime ? now.getTime() - lastAlertTime.getTime() : alertCooldown + 1000;
+
+      if (shouldSendAlert && timeSinceLastAlert >= alertCooldown) {
+        try {
+          // Create alert record in database
+          await db.insert(alerts).values({
+            websiteId: website.id,
+            alertType,
+            message: alertMessage,
+            sentAt: now,
+            emailSent: false,
+            read: false
+          });
+
+          // Send email alert
+          const emailSent = await sendAlert(website.email, {
+            websiteName: website.name,
+            websiteUrl: website.url,
+            status: result.status,
+            message: alertMessage,
+            timestamp: now,
+            responseTime: result.responseTime,
+            errorMessage: result.errorMessage
+          });
+
+          // Update alert record with email status
+          if (emailSent) {
+            await db.update(alerts)
+              .set({ emailSent: true })
+              .where(sql`website_id = ${website.id} AND sent_at = ${now}`);
+          }
+
+          console.log(`[Alert] ${alertType.toUpperCase()} alert sent for ${website.name} (${website.url})`);
+        } catch (alertError) {
+          console.error(`[Alert] Failed to send alert for ${website.name}:`, alertError);
+        }
+      } else if (shouldSendAlert) {
+        console.log(`[Alert] Skipping alert for ${website.name} due to cooldown (${Math.round(timeSinceLastAlert / 1000)}s since last alert)`);
+      }
     }
+
+    // Update website with status, SSL information, and alert timestamp
+    const updateData: any = {
+      lastStatus: result.status
+    };
+
+    if (website.url.startsWith('https://') && result.sslValid !== null) {
+      updateData.sslValid = result.sslValid;
+      updateData.sslExpiryDate = result.sslExpiryDate;
+      updateData.sslDaysLeft = result.sslDaysLeft;
+    }
+
+    if (shouldSendAlert) {
+      updateData.lastAlertSent = now;
+      updateData.lastEmailSent = now;
+    }
+
+    await storage.updateWebsite(website.id, updateData);
 
     // Broadcast the update to all connected clients
     if (broadcastUpdate) {
@@ -432,10 +503,11 @@ async function monitorWebsite(websiteId: number): Promise<MonitoringResult | und
         timestamp: now.toISOString(),
         sslValid: result.sslValid,
         sslExpiryDate: result.sslExpiryDate,
-        sslDaysLeft: result.sslDaysLeft
+        sslDaysLeft: result.sslDaysLeft,
+        alertSent: shouldSendAlert
       });
     }
-
+    
     return result;
   } catch (error) {
     console.error(`[monitorWebsite] Error monitoring website ${websiteId}:`, error);
@@ -475,7 +547,7 @@ function scheduleWebsiteMonitoring(website: Website) {
     clearInterval(monitoringIntervals.get(website.id));
     monitoringIntervals.delete(website.id);
   }
-
+  
   if (!website.isActive) {
     return;
   }
@@ -496,7 +568,7 @@ function scheduleWebsiteMonitoring(website: Website) {
 
       await monitorWebsite(website.id);
     } catch (error) {
-      console.error(`Error monitoring website ${website.id}:`, error);
+        console.error(`Error monitoring website ${website.id}:`, error);
     }
 
     // Schedule next check only if website still exists and is active
@@ -511,7 +583,7 @@ function scheduleWebsiteMonitoring(website: Website) {
         website.checkInterval * 60 * 1000
       );
       monitoringIntervals.set(website.id, timeoutId);
-    }
+  }
   };
 
   // Start monitoring immediately
@@ -559,7 +631,7 @@ export async function verifyCompressionPolicies() {
       ORDER BY chunk_creation_time DESC
       LIMIT 5;
     `);
-
+  
     console.log('\n=== Compression Policies Status ===');
     console.log('Active Policies:');
     policies.forEach(policy => {

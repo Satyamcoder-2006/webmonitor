@@ -24,6 +24,8 @@ export const websites = pgTable("websites", {
   compressionUnit: text("compression_unit").default('minutes'),
   retentionValue: integer("retention_value").default(90),
   retentionUnit: text("retention_unit").default('days'),
+  retentionScheduleValue: integer("retention_schedule_value").default(1),
+  retentionScheduleUnit: text("retention_schedule_unit").default('days'),
 });
 
 // Modified to track all checks
@@ -66,18 +68,38 @@ export type Tag = typeof tags.$inferSelect;
 export type NewTag = typeof tags.$inferInsert;
 
 // Zod schemas
-export const insertWebsiteSchema = createInsertSchema(websites)
-  .omit({ customTags: true })
-  .extend({
-    customTags: z.array(z.string()).optional(),
-  });
+export const insertWebsiteSchema = z.object({
+  name: z.string(),
+  url: z.string(),
+  email: z.string(),
+  checkInterval: z.number(),
+  isActive: z.boolean().optional(),
+  customTags: z.array(z.string()).optional(),
+  // add other fields as needed
+});
 export const selectWebsiteSchema = createSelectSchema(websites);
-export const updateWebsiteSchema = createSelectSchema(websites)
-  .partial()
-  .omit({ customTags: true })
-  .extend({
-    customTags: z.array(z.string()).optional(),
-  });
+export const updateWebsiteSchema = z.object({
+  name: z.string().optional(),
+  url: z.string().optional(),
+  email: z.string().optional(),
+  checkInterval: z.number().optional(),
+  isActive: z.boolean().optional(),
+  customTags: z.record(z.string()).optional(),
+  lastStatus: z.string().optional(),
+  lastAlertSent: z.date().optional().nullable(),
+  lastEmailSent: z.date().optional().nullable(),
+  sslValid: z.boolean().optional().nullable(),
+  sslExpiryDate: z.date().optional().nullable(),
+  sslDaysLeft: z.number().optional().nullable(),
+  compressionInterval: z.string().optional(),
+  retentionPeriod: z.string().optional(),
+  compressionValue: z.number().optional(),
+  compressionUnit: z.string().optional(),
+  retentionValue: z.number().optional(),
+  retentionUnit: z.string().optional(),
+  retentionScheduleValue: z.number().optional(),
+  retentionScheduleUnit: z.string().optional(),
+});
 
 // Plain Zod schema for compression/retention fields
 export const compressionRetentionSchema = z.object({
@@ -85,6 +107,8 @@ export const compressionRetentionSchema = z.object({
   compressionUnit: z.enum(["minutes", "hours", "days"]),
   retentionValue: z.number().min(1),
   retentionUnit: z.enum(["minutes", "hours", "days"]),
+  retentionScheduleValue: z.number().min(1).optional(),
+  retentionScheduleUnit: z.enum(["minutes", "hours", "days"]).optional(),
 });
 
 export const insertMonitoringLogSchema = z.object({

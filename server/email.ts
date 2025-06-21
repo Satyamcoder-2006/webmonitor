@@ -3,7 +3,7 @@ import * as nodemailer from 'nodemailer';
 interface AlertData {
   websiteName: string;
   websiteUrl: string;
-  status: 'up' | 'down' | 'error';
+  status: 'up' | 'down' | 'error' | 'added' | 'deleted';
   message: string;
   timestamp: Date;
   responseTime?: number;
@@ -43,8 +43,31 @@ function createTransporter() {
 }
 
 function generateEmailHTML(alertData: AlertData): string {
-  const statusColor = alertData.status === 'up' ? '#4CAF50' : '#F44336';
-  const statusText = alertData.status === 'up' ? 'ONLINE' : 'OFFLINE';
+  let statusColor = '#4CAF50';
+  let statusText = 'ONLINE';
+  
+  switch (alertData.status) {
+    case 'up':
+      statusColor = '#4CAF50';
+      statusText = 'ONLINE';
+      break;
+    case 'down':
+      statusColor = '#F44336';
+      statusText = 'OFFLINE';
+      break;
+    case 'error':
+      statusColor = '#FF9800';
+      statusText = 'ERROR';
+      break;
+    case 'added':
+      statusColor = '#2196F3';
+      statusText = 'ADDED';
+      break;
+    case 'deleted':
+      statusColor = '#9C27B0';
+      statusText = 'DELETED';
+      break;
+  }
   
   return `
     <!DOCTYPE html>
@@ -114,10 +137,22 @@ export async function sendAlert(to: string, alertData: AlertData): Promise<boole
     const fromEmail = process.env.FROM_EMAIL || process.env.EMAIL_USER || 'noreply@webmonitor.app';
     let subject = `[WebMonitor] ${alertData.websiteName} is ${alertData.status === 'up' ? 'back online' : 'offline'}`;
 
-    if (alertData.status === 'down') {
-      subject = `🚨 Site Down Alert: ${alertData.websiteName} (${alertData.websiteUrl})`;
-    } else if (alertData.status === 'up') {
-      subject = `✅ Site Up: ${alertData.websiteName} (${alertData.websiteUrl})`;
+    switch (alertData.status) {
+      case 'down':
+        subject = `🚨 Site Down Alert: ${alertData.websiteName} (${alertData.websiteUrl})`;
+        break;
+      case 'up':
+        subject = `✅ Site Up: ${alertData.websiteName} (${alertData.websiteUrl})`;
+        break;
+      case 'error':
+        subject = `⚠️ Site Error: ${alertData.websiteName} (${alertData.websiteUrl})`;
+        break;
+      case 'added':
+        subject = `➕ Website Added: ${alertData.websiteName} (${alertData.websiteUrl})`;
+        break;
+      case 'deleted':
+        subject = `🗑️ Website Removed: ${alertData.websiteName} (${alertData.websiteUrl})`;
+        break;
     }
 
     const mailOptions = {

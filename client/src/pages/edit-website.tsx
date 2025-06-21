@@ -61,6 +61,7 @@ export default function EditWebsite() {
   const { data: website, isLoading } = useQuery<FetchedWebsiteData>({
     queryKey: [`/api/websites/${websiteId}`],
     queryFn: async () => {
+      console.log("Fetching website with ID:", websiteId);
       const response = await apiRequest("GET", `/api/websites/${websiteId}`);
       if (!response.ok) {
         throw new Error('Failed to fetch website');
@@ -72,6 +73,8 @@ export default function EditWebsite() {
     enabled: !isNaN(websiteId),
   });
 
+  console.log("Query state - isLoading:", isLoading, "website:", website);
+
   const formSchema = editWebsiteFormSchema;
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -82,29 +85,50 @@ export default function EditWebsite() {
       email: "",
       checkInterval: 5,
       customTags: [],
-      isActive: false,
+      isActive: true,
     },
   });
 
-  // Update form values when website data and available tags are loaded
+  // Update form values when website data is loaded
   useEffect(() => {
-    if (website && availableTags) {
+    if (website) {
+      console.log("Setting form values with website data:", website);
       // Ensure website.customTags (from DB) is treated as an object and then converted to an array of keys for the form
       const websiteCustomTags = website.customTags || {};
       const tagsForForm: string[] = Object.keys(websiteCustomTags);
 
-      form.reset({
-        name: website.name,
-        url: website.url,
-        email: website.email,
-        checkInterval: website.checkInterval,
+      const formData = {
+        name: website.name || "",
+        url: website.url || "",
+        email: website.email || "",
+        checkInterval: website.checkInterval || 5,
         customTags: tagsForForm,
-        isActive: website.isActive,
-      });
-    }
-  }, [website, availableTags, form]);
+        isActive: website.isActive ?? true,
+      };
 
-  console.log("Form customTags on render:", form.getValues().customTags);
+      console.log("Form data to set:", formData);
+      form.reset(formData);
+      
+      // Force re-render of form fields
+      setTimeout(() => {
+        console.log("Form values after reset:", form.getValues());
+      }, 100);
+    }
+  }, [website, form]);
+
+  console.log("Current form values:", form.getValues());
+  console.log("Website data:", website);
+
+  // Debug display of form values
+  const currentFormValues = form.getValues();
+  console.log("Form field values:", {
+    name: currentFormValues.name,
+    url: currentFormValues.url,
+    email: currentFormValues.email,
+    checkInterval: currentFormValues.checkInterval,
+    isActive: currentFormValues.isActive,
+    customTags: currentFormValues.customTags
+  });
 
   const updateWebsiteMutation = useMutation({
     mutationFn: async (data: z.infer<typeof formSchema>) => {
@@ -149,9 +173,24 @@ export default function EditWebsite() {
 
   if (isLoading || isLoadingTags) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-        <p className="mt-2 text-gray-600">Loading website data...</p>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h1 className="text-2xl font-bold">Edit Website</h1>
+          <Button 
+            variant="outline" 
+            onClick={() => navigate("/")}
+          >
+            Back to Dashboard
+          </Button>
+        </div>
+        <div className="flex-grow p-4 overflow-y-auto">
+          <div className="max-w-lg mx-auto p-6 bg-white rounded-lg shadow">
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-600 mr-3" />
+              <p className="text-gray-600">Loading website data...</p>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -185,7 +224,7 @@ export default function EditWebsite() {
         </Button>
       </div>
       <div className="flex-grow p-4 overflow-y-auto">
-        <Form {...form}>
+        <Form {...form} key={website?.id || 'loading'}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 max-w-lg mx-auto p-6 bg-white rounded-lg shadow">
             <FormField
               control={form.control}
@@ -194,7 +233,11 @@ export default function EditWebsite() {
                 <FormItem>
                   <FormLabel>Website Name</FormLabel>
                   <FormControl>
-                    <Input {...field} />
+                    <Input 
+                      {...field} 
+                      value={field.value || ""}
+                      onChange={(e) => field.onChange(e.target.value)}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -208,7 +251,12 @@ export default function EditWebsite() {
                 <FormItem>
                   <FormLabel>Website URL</FormLabel>
                   <FormControl>
-                    <Input {...field} placeholder="https://example.com" />
+                    <Input 
+                      {...field} 
+                      value={field.value || ""}
+                      onChange={(e) => field.onChange(e.target.value)}
+                      placeholder="https://example.com" 
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -222,7 +270,13 @@ export default function EditWebsite() {
                 <FormItem>
                   <FormLabel>Alert Email</FormLabel>
                   <FormControl>
-                    <Input {...field} type="email" placeholder="alerts@example.com" />
+                    <Input 
+                      {...field} 
+                      type="email" 
+                      value={field.value || ""}
+                      onChange={(e) => field.onChange(e.target.value)}
+                      placeholder="alerts@example.com" 
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -263,6 +317,7 @@ export default function EditWebsite() {
                       min={1} 
                       max={60} 
                       {...field} 
+                      value={field.value || ""}
                       onChange={(e) => field.onChange(Number(e.target.value))}
                     />
                   </FormControl>

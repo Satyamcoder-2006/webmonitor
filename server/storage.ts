@@ -1,4 +1,4 @@
-import { websites, monitoringLogs, alerts, type Website, type NewWebsite, type MonitoringLog, type NewMonitoringLog, type Alert, type NewAlert, tags, type Tag, type NewTag } from "@shared/schema";
+import { websites, monitoringLogs, alerts, tags, type Website, type NewWebsite, type MonitoringLog, type NewMonitoringLog, type Alert, type NewAlert, type Tag, type NewTag } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, gte, isNotNull } from "drizzle-orm";
 
@@ -17,6 +17,14 @@ export interface IStorage {
   getLatestLogForWebsite(websiteId: number): Promise<MonitoringLog | undefined>;
   getRecentLogs(hours: number): Promise<(MonitoringLog & { website: Website | null })[]>;
 
+  // Alert operations
+  createAlert(alert: NewAlert): Promise<Alert>;
+  getAlerts(websiteId?: number, limit?: number): Promise<Alert[]>;
+  getUnreadAlerts(): Promise<Alert[]>;
+  markAlertAsRead(alertId: number): Promise<Alert | undefined>;
+  markAllAlertsAsRead(): Promise<void>;
+  deleteAlert(alertId: number): Promise<boolean>;
+
   // Analytics
   getWebsiteStats(): Promise<{
     totalSites: number;
@@ -31,13 +39,6 @@ export interface IStorage {
 
   // Clear all websites and their data
   clearAllWebsitesAndData(): Promise<void>;
-
-  // Tag operations
-  createTag(tag: NewTag): Promise<Tag>;
-  getTags(): Promise<Tag[]>;
-  getTag(id: number): Promise<Tag | undefined>;
-  updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined>;
-  deleteTag(id: number): Promise<boolean>;
 
   // New methods
   getHourlyStats(websiteId: number, hours: number): Promise<{ timestamp: Date; avgResponseTime: number; uptime: number }[]>;
@@ -258,35 +259,48 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async createTag(tag: NewTag): Promise<Tag> {
-    const [result] = await db.insert(tags).values(tag).returning();
+  async createAlert(alert: NewAlert): Promise<Alert> {
+    const [result] = await db.insert(alerts).values(alert).returning();
     return result;
   }
 
-  async getTags(): Promise<Tag[]> {
-    return await db.select().from(tags).orderBy(tags.name);
+  async getAlerts(websiteId?: number, limit = 50): Promise<Alert[]> {
+    const conditions = [];
+    if (websiteId) {
+      conditions.push(eq(alerts.websiteId, websiteId));
+    }
+    return await db.select().from(alerts)
+      .where(and(...conditions))
+      .orderBy(desc(alerts.sentAt))
+      .limit(limit);
   }
 
-  async getTag(id: number): Promise<Tag | undefined> {
-    const [tag] = await db.select().from(tags).where(eq(tags.id, id));
-    return tag;
+  async getUnreadAlerts(): Promise<Alert[]> {
+    return await db.select().from(alerts)
+      .where(eq(alerts.read, false))
+      .orderBy(desc(alerts.sentAt));
   }
 
-  async updateTag(id: number, updates: Partial<Tag>): Promise<Tag | undefined> {
-    const [updated] = await db.update(tags).set(updates).where(eq(tags.id, id)).returning();
+  async markAlertAsRead(alertId: number): Promise<Alert | undefined> {
+    const [updated] = await db.update(alerts)
+      .set({ read: true })
+      .where(eq(alerts.id, alertId))
+      .returning();
     return updated;
   }
 
-  async deleteTag(id: number): Promise<boolean> {
-    const result = await db.delete(tags).where(eq(tags.id, id)).returning({ id: tags.id });
+  async markAllAlertsAsRead(): Promise<void> {
+    await db.update(alerts).set({ read: true });
+  }
+
+  async deleteAlert(alertId: number): Promise<boolean> {
+    const result = await db.delete(alerts)
+      .where(eq(alerts.id, alertId))
+      .returning({ id: alerts.id });
     return result.length > 0;
   }
 
   async bulkInsertMonitoringLogs(logs: NewMonitoringLog[]): Promise<void> {
-    if (logs.length === 0) return;
-    console.log('logsToInsert sample:', logs[0]);
-    console.log('Type:', typeof logs[0]);
-    console.log('All keys:', Object.keys(logs[0]));
     await db.insert(monitoringLogs).values(logs);
   }
 }

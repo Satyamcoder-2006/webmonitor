@@ -42,6 +42,18 @@ interface SystemSettings {
   compressionUnit?: string;
   retentionValue?: number;
   retentionUnit?: string;
+  retentionScheduleValue?: number;
+  retentionScheduleUnit?: string;
+}
+
+// Helper to convert interval to minutes
+function intervalToMinutes(value: number, unit: string): number {
+  switch (unit) {
+    case 'minutes': return value;
+    case 'hours': return value * 60;
+    case 'days': return value * 1440;
+    default: return value;
+  }
 }
 
 export default function Settings() {
@@ -139,9 +151,59 @@ export default function Settings() {
   const [compressionUnit, setCompressionUnit] = useState(settings?.compressionUnit ?? 'minutes');
   const [retentionValue, setRetentionValue] = useState(settings?.retentionValue ?? 90);
   const [retentionUnit, setRetentionUnit] = useState(settings?.retentionUnit ?? 'days');
+  const [retentionScheduleValue, setRetentionScheduleValue] = useState(settings?.retentionScheduleValue ?? 1);
+  const [retentionScheduleUnit, setRetentionScheduleUnit] = useState(settings?.retentionScheduleUnit ?? "days");
   const [saving, setSaving] = useState(false);
 
+  const chunkSizeMinutes = 7 * 24 * 60; // 7 days in minutes
+
   const handleSaveCompressionRetention = async () => {
+    // Validation logic
+    const bufferFlushMinutes = 5; // Buffer flushes every 5 minutes
+    const compressionMinutes = intervalToMinutes(compressionValue, compressionUnit);
+    const retentionMinutes = intervalToMinutes(retentionValue, retentionUnit);
+    const retentionScheduleMinutes = intervalToMinutes(retentionScheduleValue, retentionScheduleUnit);
+
+    if (compressionMinutes < bufferFlushMinutes) {
+      toast({
+        title: 'Invalid Compression Interval',
+        description: 'Compression interval cannot be less than 5 minutes (the buffer flush interval).',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (compressionMinutes > retentionMinutes) {
+      toast({
+        title: 'Invalid Compression Interval',
+        description: 'Compression interval cannot be greater than the retention period.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (retentionScheduleMinutes < 1) {
+      toast({
+        title: 'Invalid Retention Schedule',
+        description: 'Retention schedule cannot be less than 1 minute.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (retentionScheduleMinutes > retentionMinutes) {
+      toast({
+        title: 'Invalid Retention Schedule',
+        description: 'Retention schedule cannot be greater than the retention period.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (retentionMinutes < chunkSizeMinutes) {
+      toast({
+        title: 'Invalid Retention Period',
+        description: 'Retention period must be greater than or equal to the chunk size (currently 7 days).',
+        variant: 'destructive',
+      });
+      return;
+    }
     setSaving(true);
     try {
       await updateSettingsMutation.mutateAsync({
@@ -149,8 +211,10 @@ export default function Settings() {
         compressionUnit,
         retentionValue,
         retentionUnit,
+        retentionScheduleValue,
+        retentionScheduleUnit,
       });
-      toast({ title: 'Settings updated', description: 'Compression and retention settings saved.' });
+      toast({ title: 'Settings updated', description: 'Compression, retention, and retention schedule settings saved.' });
     } catch (error: any) {
       toast({ title: 'Failed to update', description: error.message, variant: 'destructive' });
     } finally {
@@ -164,6 +228,8 @@ export default function Settings() {
       setCompressionUnit(settings.compressionUnit ?? "minutes");
       setRetentionValue(settings.retentionValue ?? 90);
       setRetentionUnit(settings.retentionUnit ?? "days");
+      setRetentionScheduleValue(settings.retentionScheduleValue ?? 1);
+      setRetentionScheduleUnit(settings.retentionScheduleUnit ?? "days");
     }
   }, [settings]);
 
@@ -313,7 +379,7 @@ export default function Settings() {
           {/* Compression & Retention Settings */}
           <div className="glass-card rounded-lg p-4 mb-4">
             <h3 className="text-lg font-medium mb-2 text-gray-900 dark:text-white">Compression & Retention</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <Label htmlFor="compressionValue" className="text-gray-900 dark:text-white">Compression Interval</Label>
                 <div className="flex gap-2">
@@ -349,6 +415,29 @@ export default function Settings() {
                     className="glass-button w-24 text-gray-900 dark:text-white"
                   />
                   <Select value={retentionUnit} onValueChange={setRetentionUnit}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="minutes">Minutes</SelectItem>
+                      <SelectItem value="hours">Hours</SelectItem>
+                      <SelectItem value="days">Days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="retentionScheduleValue" className="text-gray-900 dark:text-white">Retention Schedule</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="retentionScheduleValue"
+                    type="number"
+                    min={1}
+                    value={retentionScheduleValue}
+                    onChange={e => setRetentionScheduleValue(Number(e.target.value))}
+                    className="glass-button w-24 text-gray-900 dark:text-white"
+                  />
+                  <Select value={retentionScheduleUnit} onValueChange={setRetentionScheduleUnit}>
                     <SelectTrigger className="w-32">
                       <SelectValue />
                     </SelectTrigger>

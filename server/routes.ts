@@ -9,8 +9,56 @@ import { setBroadcastFunction } from "./monitoring";
 import WebSocket from 'ws';
 import { and, eq, gte, desc, sql } from "drizzle-orm";
 import { monitoringBuffer } from "./monitoring";
+import { db } from "./db";
 
 let wss: WebSocketServer;
+
+// Helper to convert interval to minutes
+function intervalToMinutes(value: number, unit: string): number {
+  switch (unit) {
+    case 'minutes': return value;
+    case 'hours': return value * 60;
+    case 'days': return value * 1440;
+    default: return value;
+  }
+}
+
+// Helper to convert interval to a valid SQL interval string
+function toSqlInterval(value: number, unit: string): string {
+  return `${value} ${unit}`;
+}
+
+// Helper to update global compression and retention policies and schedule
+async function updateGlobalPolicies(
+  compressionValue: number,
+  compressionUnit: string,
+  retentionValue: number,
+  retentionUnit: string,
+  retentionScheduleValue: number,
+  retentionScheduleUnit: string
+) {
+  const compressionInterval = toSqlInterval(compressionValue, compressionUnit);
+  const retentionPeriod = toSqlInterval(retentionValue, retentionUnit);
+  const retentionSchedule = toSqlInterval(retentionScheduleValue, retentionScheduleUnit);
+  // Update compression and retention policies (inline intervals)
+  await db.execute(`
+    ALTER TABLE monitoring_logs SET (timescaledb.compress = true);
+    SELECT remove_compression_policy('monitoring_logs');
+    SELECT add_compression_policy('monitoring_logs', INTERVAL '${compressionInterval}');
+    SELECT remove_retention_policy('monitoring_logs');
+    SELECT add_retention_policy('monitoring_logs', INTERVAL '${retentionPeriod}');
+  `);
+  // Update the retention job schedule
+  const jobs = await db.execute(sql`
+    SELECT job_id FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention' AND hypertable_name = 'monitoring_logs';
+  `);
+  if (jobs.length > 0) {
+    const jobId = jobs[0].job_id;
+    await db.execute(`
+      SELECT alter_job(${jobId}, schedule_interval => INTERVAL '${retentionSchedule}');
+    `);
+  }
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const server = createServer(app);
@@ -99,29 +147,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new website
   app.post("/api/websites", async (req, res) => {
     try {
-      const baseData = insertWebsiteSchema.parse(req.body);
-      const { compressionValue, compressionUnit, retentionValue, retentionUnit } = compressionRetentionSchema.parse(req.body);
-      const dataForStorage: NewWebsite = { ...baseData, compressionValue, compressionUnit, retentionValue, retentionUnit };
-
-      if (Array.isArray(dataForStorage.customTags)) {
-        dataForStorage.customTags = dataForStorage.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
-      } else {
-        dataForStorage.customTags = {}; // Ensure it's an empty object if no tags or not an array
-      }
-
-      // Ensure compressionInterval and retentionPeriod are set
-      if (dataForStorage.compressionInterval) {
-        dataForStorage.compressionInterval = dataForStorage.compressionInterval;
-      }
-      if (dataForStorage.retentionPeriod) {
-        dataForStorage.retentionPeriod = dataForStorage.retentionPeriod;
-      }
-
-      const website = await storage.createWebsite(dataForStorage);
+      const validatedData = insertWebsiteSchema.parse(req.body);
+      const website = await storage.createWebsite(validatedData);
       
-      // Schedule monitoring for the new website
-      const { updateWebsiteMonitoring } = await import("./monitoring");
-      updateWebsiteMonitoring(website);
+      // Create alert for website addition
+      try {
+        const { alerts } = await import("@shared/schema");
+        await db.insert(alerts).values({
+          websiteId: website.id,
+          alertType: 'website_added',
+          message: `Website "${website.name}" (${website.url}) has been added to monitoring`,
+          sentAt: new Date(),
+          emailSent: false,
+          read: false
+        });
+        
+        // Send email alert for website addition
+        const { sendAlert } = await import('./email');
+        await sendAlert(website.email, {
+          websiteName: website.name,
+          websiteUrl: website.url,
+          status: 'added',
+          message: `Website "${website.name}" has been successfully added to WebMonitor and will be monitored every ${website.checkInterval} minutes.`,
+          timestamp: new Date(),
+          responseTime: undefined,
+          errorMessage: undefined
+        });
+        
+        console.log(`[Alert] Website addition alert sent for ${website.name}`);
+      } catch (alertError) {
+        console.error(`[Alert] Failed to send website addition alert for ${website.name}:`, alertError);
+      }
       
       res.status(201).json(website);
     } catch (error) {
@@ -143,13 +199,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
-      const baseUpdates = updateWebsiteSchema.parse(req.body);
-      const retentionFields = compressionRetentionSchema.partial().parse(req.body);
-      const dataForStorage: Partial<Website> = { ...baseUpdates, ...retentionFields };
-
-      if (Array.isArray(dataForStorage.customTags)) {
-        dataForStorage.customTags = dataForStorage.customTags.reduce((acc, tagName) => ({ ...acc, [tagName]: tagName }), {});
+      // Always convert customTags from array to record, or undefined
+      let reqBody = { ...req.body };
+      if (Array.isArray(reqBody.customTags)) {
+        reqBody.customTags = reqBody.customTags.reduce((acc: Record<string, string>, tagName: string) => ({ ...acc, [tagName]: tagName }), {});
+      } else {
+        reqBody.customTags = undefined;
       }
+
+      const baseUpdates = updateWebsiteSchema.parse(reqBody);
+      const dataForStorage: Partial<Website> = { ...baseUpdates };
+
       // Ensure compressionInterval and retentionPeriod are set
       if (dataForStorage.compressionInterval) {
         dataForStorage.compressionInterval = dataForStorage.compressionInterval;
@@ -191,6 +251,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid website ID" });
       }
 
+      // Get website details before deletion for alert
+      const website = await storage.getWebsite(id);
+      if (!website) {
+        return res.status(404).json({ message: "Website not found" });
+      }
+
       // Stop monitoring for this website
       const { stopWebsiteMonitoring } = await import("./monitoring");
       stopWebsiteMonitoring(id);
@@ -198,6 +264,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const deleted = await storage.deleteWebsite(id);
       if (!deleted) {
         return res.status(404).json({ message: "Website not found" });
+      }
+
+      // Send email alert for website deletion
+      try {
+        const { sendAlert } = await import('./email');
+        await sendAlert(website.email, {
+          websiteName: website.name,
+          websiteUrl: website.url,
+          status: 'deleted',
+          message: `Website "${website.name}" (${website.url}) has been removed from WebMonitor monitoring.`,
+          timestamp: new Date(),
+          responseTime: undefined,
+          errorMessage: undefined
+        });
+        
+        console.log(`[Alert] Website deletion alert sent for ${website.name}`);
+      } catch (alertError) {
+        console.error(`[Alert] Failed to send website deletion alert for ${website.name}:`, alertError);
       }
       
       res.status(204).send();
@@ -443,24 +527,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const [websites, filteredLogs] = await Promise.all([
         storage.getWebsites(),
-        storage.getMonitoringLogs(undefined, 10000, startDate) // Get logs filtered by timeRange
+        storage.getMonitoringLogs(undefined, 10000, startDate),
       ]);
 
-      // Calculate metrics from filteredLogs
+      // --- Uptime & Downtime ---
       const totalChecks = filteredLogs.length;
-      const validResponseTimes = filteredLogs.filter(log => log.responseTime && log.responseTime > 0);
-      const averageResponseTime = validResponseTimes.length > 0 
-        ? Math.round(validResponseTimes.reduce((sum, log) => sum + log.responseTime!, 0) / validResponseTimes.length)
-        : 0;
-
-      // Calculate uptime percentage and downtime events from filteredLogs
       const upChecks = filteredLogs.filter(log => log.status === 'up').length;
       const downtimeEvents = filteredLogs.filter(log => log.status === 'down').length;
-      const uptimePercentage = filteredLogs.length > 0 
-        ? Math.round((upChecks / filteredLogs.length) * 100)
-        : 0;
+      const uptimePercentage = totalChecks > 0 ? Math.round((upChecks / totalChecks) * 100) : 0;
+      const totalDowntime = filteredLogs.filter(log => log.status === 'down').length * 5; // 5 min interval assumed
 
-      // Response time data by hour (or day for longer ranges)
+      // --- Performance ---
+      const validResponseTimes = filteredLogs.filter(log => log.responseTime && log.responseTime > 0).map(log => log.responseTime!);
+      const averageResponseTime = validResponseTimes.length > 0 ? Math.round(validResponseTimes.reduce((sum, v) => sum + v, 0) / validResponseTimes.length) : 0;
+      const sortedResponseTimes = [...validResponseTimes].sort((a, b) => a - b);
+      const percentile = (arr: number[], p: number) => arr.length ? arr[Math.floor((p / 100) * arr.length)] : 0;
+      const p95ResponseTime = percentile(sortedResponseTimes, 95);
+      const p99ResponseTime = percentile(sortedResponseTimes, 99);
+      const slowestResponseTime = sortedResponseTimes[sortedResponseTimes.length - 1] || 0;
+      const fastestResponseTime = sortedResponseTimes[0] || 0;
+
+      // --- Status Codes ---
+      const statusCodeCounts = filteredLogs.reduce((acc, log) => {
+        if (log.httpStatus) acc[log.httpStatus] = (acc[log.httpStatus] || 0) + 1;
+        return acc;
+      }, {} as Record<number, number>);
+      const mostFrequentErrorCodes = Object.entries(statusCodeCounts)
+        .filter(([code]) => Number(code) >= 400)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([code, count]) => ({ code: Number(code), count }));
+
+      // --- Alerts ---
+      let alerts: any[] = [];
+      let numberOfAlerts = 0;
+      // If you implement storage.getAlerts in the future, you can fetch real alert data here.
+      // For now, alerts and numberOfAlerts are always empty/zero.
+      // Average time to recovery: time between a down and next up
+      let recoveryTimes: number[] = [];
+      let lastDownTime: Date | null = null;
+      for (const log of filteredLogs) {
+        if (log.status === 'down') {
+          lastDownTime = new Date(log.checkedAt);
+        } else if (log.status === 'up' && lastDownTime) {
+          const upTime = new Date(log.checkedAt);
+          recoveryTimes.push((upTime.getTime() - lastDownTime.getTime()) / 60000); // in minutes
+          lastDownTime = null;
+        }
+      }
+      const averageTimeToRecovery = recoveryTimes.length > 0 ? Math.round(recoveryTimes.reduce((a, b) => a + b, 0) / recoveryTimes.length) : 0;
+
+      // --- Checks ---
+      // Missed checks: if there is a gap > expected interval (5 min) between logs for a website
+      let missedChecks = 0;
+      const logsByWebsite = websites.reduce((acc, w) => {
+        acc[w.id] = filteredLogs.filter(l => l.websiteId === w.id).sort((a, b) => new Date(a.checkedAt).getTime() - new Date(b.checkedAt).getTime());
+        return acc;
+      }, {} as Record<number, typeof filteredLogs>);
+      for (const logs of Object.values(logsByWebsite)) {
+        for (let i = 1; i < logs.length; i++) {
+          const prev = new Date(logs[i - 1].checkedAt).getTime();
+          const curr = new Date(logs[i].checkedAt).getTime();
+          if (curr - prev > 6 * 60 * 1000) missedChecks++; // >6min gap
+        }
+      }
+
+      // --- SSL ---
+      const now = new Date();
+      const sslExpiries = websites.map(w => ({
+        id: w.id,
+        name: w.name,
+        url: w.url,
+        sslExpiryDate: w.sslExpiryDate,
+        sslDaysLeft: w.sslDaysLeft,
+      })).filter(w => w.sslExpiryDate);
+      const expiringSSLs = sslExpiries.filter(w => w.sslDaysLeft !== null && w.sslDaysLeft !== undefined && w.sslDaysLeft <= 30 && w.sslDaysLeft > 0);
+      const expiredSSLs = sslExpiries.filter(w => w.sslDaysLeft !== null && w.sslDaysLeft <= 0);
+
+      // --- Tags ---
+      const tagStats: Record<string, { uptime: number; avgResponseTime: number; count: number }> = {};
+      for (const website of websites) {
+        const tags = website.customTags ? Object.keys(website.customTags) : [];
+        const websiteLogs = filteredLogs.filter(l => l.websiteId === website.id);
+        const upChecks = websiteLogs.filter(l => l.status === 'up').length;
+        const avgResp = websiteLogs.filter(l => l.responseTime && l.responseTime > 0).map(l => l.responseTime!);
+        for (const tag of tags) {
+          if (!tagStats[tag]) tagStats[tag] = { uptime: 0, avgResponseTime: 0, count: 0 };
+          tagStats[tag].uptime += websiteLogs.length > 0 ? (upChecks / websiteLogs.length) * 100 : 0;
+          tagStats[tag].avgResponseTime += avgResp.length > 0 ? avgResp.reduce((a, b) => a + b, 0) / avgResp.length : 0;
+          tagStats[tag].count++;
+        }
+      }
+      const tagAnalytics = Object.entries(tagStats).map(([tag, stats]) => ({
+        tag,
+        avgUptime: stats.count > 0 ? Math.round(stats.uptime / stats.count) : 0,
+        avgResponseTime: stats.count > 0 ? Math.round(stats.avgResponseTime / stats.count) : 0,
+      }));
+
+      // --- Response time data by hour (or day for longer ranges) ---
       const groupedData = new Map();
       const formatKey = (date: Date) => {
         if (timeRange === "24h") {
@@ -469,38 +633,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return date.toLocaleDateString(); // Group by day for longer ranges
         }
       };
-
-      validResponseTimes.forEach(log => {
+      validResponseTimes.forEach((rt, i) => {
+        const log = filteredLogs.filter(l => l.responseTime && l.responseTime > 0)[i];
         const key = formatKey(new Date(log.checkedAt));
         if (!groupedData.has(key)) {
           groupedData.set(key, { total: 0, count: 0 });
         }
         const data = groupedData.get(key);
-        data.total += log.responseTime!;
+        data.total += rt;
         data.count += 1;
       });
-
       const responseTimeData = Array.from(groupedData.entries())
         .map(([key, data]) => ({
           hour: key,
           averageResponseTime: Math.round(data.total / data.count),
           checks: data.count
         }))
-        .sort((a, b) => a.hour.localeCompare(b.hour)); // Sort by time/date
+        .sort((a, b) => a.hour.localeCompare(b.hour));
 
-      // Status distribution
+      // --- Status distribution ---
       const statusCounts = filteredLogs.reduce((acc, log) => {
         acc[log.status] = (acc[log.status] || 0) + 1;
         return acc;
       }, {} as Record<string, number>);
-
       const statusDistribution = Object.entries(statusCounts).map(([status, count]) => ({
         status,
         count,
         percentage: totalChecks > 0 ? Math.round((count / totalChecks) * 100) : 0
       }));
 
-      // Website stats
+      // --- Website stats ---
       const websiteStats = await Promise.all(
         websites.map(async (website) => {
           const websiteLogs = filteredLogs.filter(log => log.websiteId === website.id);
@@ -508,14 +670,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const websiteUptime = websiteLogs.length > 0 
             ? Math.round((websiteUpChecks / websiteLogs.length) * 100)
             : 0;
-          
           const websiteResponseTimes = websiteLogs.filter(log => log.responseTime && log.responseTime > 0);
           const websiteAvgResponse = websiteResponseTimes.length > 0
             ? Math.round(websiteResponseTimes.reduce((sum, log) => sum + log.responseTime!, 0) / websiteResponseTimes.length)
             : 0;
-
           const lastDowntimeLog = websiteLogs.find(log => log.status === 'down');
-
           return {
             id: website.id,
             name: website.name,
@@ -531,8 +690,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         totalChecks,
         averageResponseTime,
+        p95ResponseTime,
+        p99ResponseTime,
+        slowestResponseTime,
+        fastestResponseTime,
         uptimePercentage,
         downtimeEvents,
+        totalDowntime,
+        statusCodeCounts,
+        mostFrequentErrorCodes,
+        numberOfAlerts,
+        averageTimeToRecovery,
+        missedChecks,
+        expiringSSLs,
+        expiredSSLs,
+        tagAnalytics,
         responseTimeData,
         statusDistribution,
         websiteStats
@@ -564,6 +736,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error sending test email:', error);
       res.status(500).json({ message: "Failed to send test email" });
+    }
+  });
+
+  // Get alerts endpoint
+  app.get("/api/alerts", async (req, res) => {
+    try {
+      const websiteId = req.query.websiteId ? parseInt(req.query.websiteId as string) : undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+      
+      const alerts = await storage.getAlerts(websiteId, limit);
+      res.json(alerts);
+    } catch (error) {
+      console.error('Error fetching alerts:', error);
+      res.status(500).json({ message: "Failed to fetch alerts" });
+    }
+  });
+
+  // Get unread alerts endpoint
+  app.get("/api/alerts/unread", async (req, res) => {
+    try {
+      const alerts = await storage.getUnreadAlerts();
+      res.json(alerts);
+    } catch (error) {
+      console.error('Error fetching unread alerts:', error);
+      res.status(500).json({ message: "Failed to fetch unread alerts" });
+    }
+  });
+
+  // Mark alert as read endpoint
+  app.put("/api/alerts/:id/read", async (req, res) => {
+    try {
+      const alertId = parseInt(req.params.id);
+      const alert = await storage.markAlertAsRead(alertId);
+      
+      if (alert) {
+        res.json(alert);
+      } else {
+        res.status(404).json({ message: "Alert not found" });
+      }
+    } catch (error) {
+      console.error('Error marking alert as read:', error);
+      res.status(500).json({ message: "Failed to mark alert as read" });
+    }
+  });
+
+  // Mark all alerts as read endpoint
+  app.put("/api/alerts/read-all", async (req, res) => {
+    try {
+      await storage.markAllAlertsAsRead();
+      res.json({ message: "All alerts marked as read" });
+    } catch (error) {
+      console.error('Error marking all alerts as read:', error);
+      res.status(500).json({ message: "Failed to mark all alerts as read" });
+    }
+  });
+
+  // Delete alert endpoint
+  app.delete("/api/alerts/:id", async (req, res) => {
+    try {
+      const alertId = parseInt(req.params.id);
+      const success = await storage.deleteAlert(alertId);
+      
+      if (success) {
+        res.json({ message: "Alert deleted successfully" });
+      } else {
+        res.status(404).json({ message: "Alert not found" });
+      }
+    } catch (error) {
+      console.error('Error deleting alert:', error);
+      res.status(500).json({ message: "Failed to delete alert" });
     }
   });
 
@@ -601,6 +843,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         compressionUnit: first?.compressionUnit ?? "minutes",
         retentionValue: first?.retentionValue ?? 90,
         retentionUnit: first?.retentionUnit ?? "days",
+        retentionScheduleValue: first?.retentionScheduleValue ?? 1,
+        retentionScheduleUnit: first?.retentionScheduleUnit ?? "days",
       };
       res.json(settings);
     } catch (error) {
@@ -612,6 +856,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update settings endpoint
   app.put("/api/settings", async (req, res) => {
     try {
+      // Backend validation for compression/retention intervals and schedule
+      const bufferFlushMinutes = 5;
+      const compressionMinutes = intervalToMinutes(req.body.compressionValue, req.body.compressionUnit);
+      const retentionMinutes = intervalToMinutes(req.body.retentionValue, req.body.retentionUnit);
+      const retentionScheduleMinutes = intervalToMinutes(req.body.retentionScheduleValue, req.body.retentionScheduleUnit);
+      if (compressionMinutes < bufferFlushMinutes) {
+        return res.status(400).json({ message: "Compression interval cannot be less than 5 minutes (the buffer flush interval)." });
+      }
+      if (compressionMinutes > retentionMinutes) {
+        return res.status(400).json({ message: "Compression interval cannot be greater than the retention period." });
+      }
+      if (retentionScheduleMinutes < 1) {
+        return res.status(400).json({ message: "Retention schedule cannot be less than 1 minute." });
+      }
+      if (retentionScheduleMinutes > retentionMinutes) {
+        return res.status(400).json({ message: "Retention schedule cannot be greater than the retention period." });
+      }
       const websites = await storage.getWebsites();
       if (websites.length === 0) {
         return res.status(404).json({ message: "No websites found" });
@@ -622,15 +883,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           compressionUnit: req.body.compressionUnit,
           retentionValue: req.body.retentionValue,
           retentionUnit: req.body.retentionUnit,
+          retentionScheduleValue: req.body.retentionScheduleValue,
+          retentionScheduleUnit: req.body.retentionScheduleUnit,
         });
-        // Update monitoring/compression policy for each website
-        const updated = await storage.getWebsite(website.id);
-        if (updated) {
-          const { updateWebsiteMonitoring } = await import("./monitoring");
-          updateWebsiteMonitoring(updated);
-        }
       }
-      res.json({ message: "Settings updated for all websites" });
+      // Update global TimescaleDB policies and schedule ONCE after all websites are updated
+      await updateGlobalPolicies(
+        req.body.compressionValue,
+        req.body.compressionUnit,
+        req.body.retentionValue,
+        req.body.retentionUnit,
+        req.body.retentionScheduleValue,
+        req.body.retentionScheduleUnit
+      );
+      res.json({ message: "Settings updated for all websites and global policies/schedule updated" });
     } catch (error) {
       console.error('Error updating settings:', error);
       res.status(500).json({ message: "Failed to update settings" });
@@ -668,100 +934,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error restarting monitoring:', error);
       res.status(500).json({ message: "Failed to restart monitoring" });
-    }
-  });
-
-  // Get all tags
-  app.get("/api/tags", async (req, res) => {
-    try {
-      const tags = await storage.getTags();
-      res.json(tags);
-    } catch (error) {
-      console.error('Error fetching tags:', error);
-      res.status(500).json({ message: "Failed to fetch tags" });
-    }
-  });
-
-  // Get a single tag by ID
-  app.get("/api/tags/:id", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid tag ID" });
-      }
-
-      const tag = await storage.getTag(id);
-      if (!tag) {
-        return res.status(404).json({ message: "Tag not found" });
-      }
-      res.json(tag);
-    } catch (error) {
-      console.error('Error fetching tag by ID:', error);
-      res.status(500).json({ message: "Failed to fetch tag" });
-    }
-  });
-
-  // Create new tag
-  app.post("/api/tags", async (req, res) => {
-    try {
-      const validatedData = insertTagSchema.parse(req.body);
-      const tag = await storage.createTag(validatedData);
-      res.status(201).json(tag);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        const validationError = fromZodError(error);
-        res.status(400).json({ message: validationError.message });
-      } else {
-        console.error('Error creating tag:', error);
-        res.status(500).json({ message: "Failed to create tag" });
-      }
-    }
-  });
-
-  // Update tag
-  app.patch("/api/tags/:id", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid tag ID" });
-      }
-
-      const updates = selectTagSchema.partial().parse(req.body);
-      const tag = await storage.updateTag(id, updates);
-      
-      if (!tag) {
-        return res.status(404).json({ message: "Tag not found" });
-      }
-      
-      res.json(tag);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        const validationError = fromZodError(error);
-        res.status(400).json({ message: validationError.message });
-      } else {
-        console.error('Error updating tag:', error);
-        res.status(500).json({ message: "Failed to update tag" });
-      }
-    }
-  });
-
-  // Delete tag
-  app.delete("/api/tags/:id", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: "Invalid tag ID" });
-      }
-
-      const deleted = await storage.deleteTag(id);
-      if (!deleted) {
-        return res.status(404).json({ message: "Tag not found" });
-      }
-      
-      res.status(204).send();
-    } catch (error) {
-      console.error('Error deleting tag:', error);
-      res.status(500).json({ message: "Failed to delete tag" });
     }
   });
 

@@ -6,7 +6,8 @@ import {
   ChartBar, 
   Cog,
   Monitor,
-  Tag
+  Tag,
+  Bell
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -21,6 +22,7 @@ const Sidebar = ({ isExpanded, setIsExpanded }: SidebarProps) => {
     { path: '/', icon: ChartLine, label: 'Dashboard' },
     { path: '/websites/new', icon: PlusCircle, label: 'Add Website' },
     { path: '/analytics', icon: ChartBar, label: 'Analytics' },
+    { path: '/alerts', icon: Bell, label: 'Alerts' },
     { path: '/tags', icon: Tag, label: 'Tags' },
     { path: '/settings', icon: Cog, label: 'Settings' },
   ];
