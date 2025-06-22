@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -17,6 +17,10 @@ import NotFound from "@/pages/not-found";
 
 function App() {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+
+  useEffect(() => {
+    document.title = "DICVMONITOR";
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

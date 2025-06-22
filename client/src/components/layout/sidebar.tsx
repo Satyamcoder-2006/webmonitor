@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { Globe, BarChart3, Plus, Activity, Bell, Settings } from "lucide-react";
+import BharatBenzLogo from "@/assets/bharatbenz-logo.png";
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: BarChart3, current: true },
@@ -16,11 +17,9 @@ export default function Sidebar() {
     <div className="w-64 bg-white shadow-lg border-r border-gray-200">
       <div className="p-6 border-b border-gray-200">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-            <Globe className="text-white text-lg h-5 w-5" />
-          </div>
+          <img src={BharatBenzLogo} alt="DICVMONITOR Logo" className="w-24 h-24 rounded-lg bg-white" />
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">WebMonitor</h1>
+            <h1 className="text-xl font-semibold text-gray-900">DICVMONITOR</h1>
             <p className="text-sm text-gray-500">Status Dashboard</p>
           </div>
         </div>

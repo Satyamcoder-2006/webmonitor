@@ -10,6 +10,7 @@ import {
   Bell,
   BarChart3
 } from 'lucide-react';
+import BharatBenzLogo from "@/assets/bharatbenz-logo.png";
 
 interface SidebarProps {
   isExpanded: boolean;
@@ -40,13 +41,13 @@ const Sidebar = ({ isExpanded, setIsExpanded }: SidebarProps) => {
       <div className="flex flex-col h-full">
         {/* Logo */}
         <div className="flex items-center gap-3 h-16 px-4 border-b border-gray-200 dark:border-gray-800 overflow-hidden">
-          <Monitor className="w-8 h-8 text-primary flex-shrink-0" />
+          <img src={BharatBenzLogo} alt="DICVMONITOR Logo" className="w-8 h-8 flex-shrink-0 rounded-full bg-white" />
           <span 
             className={`text-xl font-semibold text-gray-900 dark:text-white whitespace-nowrap transition-[width,opacity] duration-500 ease-out ${
               isExpanded ? 'opacity-100 w-[180px]' : 'opacity-0 w-0'
             }`}
           >
-            WebMonitor
+            DICVMONITOR
           </span>
         </div>
 
