@@ -72,8 +72,14 @@ A comprehensive, real-time website monitoring platform built with modern web tec
 - **Recharts** for beautiful data visualizations
 - **Lucide React** for consistent iconography
 
-### **Backend Stack**
-- **Node.js** with Express.js framework
+### **Backend Stack (Microservices Architecture)**
+- **Main Server**: Node.js with Express.js framework (Port 5000)
+  - Handles API endpoints, authentication, real-time monitoring, and serves the React frontend
+  - Manages website monitoring, alerts, and user interface
+- **Archiver Service**: Dedicated microservice (Port 6001)
+  - Handles batch processing of monitoring logs
+  - Efficiently stores high-volume monitoring data
+  - Separates data archival from main application logic
 - **TypeScript** for type-safe server-side code
 - **PostgreSQL** with TimescaleDB extension for time-series data
 - **Drizzle ORM** for type-safe database operations
@@ -107,7 +113,13 @@ cd WebWatchTower
 
 2. **Install dependencies**
 ```bash
+# Install main application dependencies
 npm install
+
+# Install archiver service dependencies
+cd archiver-service
+npm install
+cd ..
 ```
 
 3. **Set up environment variables**
@@ -141,19 +153,50 @@ npm run migrate
 npm run db:test-data
 ```
 
-5. **Start the development server**
+5. **Start the backend services**
+
+**Option A: Start both services in separate terminals**
+
+Terminal 1 (Main Server):
 ```bash
 npm run dev
 ```
 
-The application will be available at `http://localhost:5000`
+Terminal 2 (Archiver Service):
+```bash
+cd archiver-service
+npm start
+```
+
+**Option B: Start both services using a process manager (recommended for production)**
+```bash
+# Install PM2 globally if you haven't already
+npm install -g pm2
+
+# Start both services
+pm2 start server/index.ts --name "webwatchtower-main" --interpreter tsx
+pm2 start archiver-service/src/index.ts --name "webwatchtower-archiver" --interpreter tsx
+
+# Monitor services
+pm2 status
+pm2 logs
+```
+
+The application will be available at:
+- **Main Application**: `http://localhost:5000`
+- **Archiver Service**: `http://localhost:6001` (API endpoint for batch log processing)
 
 ## 📋 Available Scripts
 
 ```bash
 # Development
-npm run dev              # Start development server
-npm run dev:unix         # Start development server (Unix systems)
+npm run dev              # Start main development server (Port 5000)
+npm run dev:unix         # Start main development server (Unix systems)
+
+# Archiver Service
+cd archiver-service
+npm start               # Start archiver service (Port 6001)
+npm run dev             # Start archiver service in development mode
 
 # Database Management
 npm run db:generate      # Generate database migrations
@@ -170,6 +213,10 @@ npm run check            # TypeScript type checking
 ```
 
 ## 🔧 Configuration
+
+### **Service Ports**
+- **Main Server**: Port 5000 (serves API and frontend)
+- **Archiver Service**: Port 6001 (handles batch log processing)
 
 ### **Monitoring Settings**
 - **Default Check Interval**: 60 minutes (configurable per website)
